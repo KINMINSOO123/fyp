@@ -9,7 +9,7 @@
 
 Define every domain entity, database table, and canonical constant the system shares. One source of truth for schema, types, and seed data so every module (Node.js, Python ML, Flutter) speaks the same language.
 
-**Scope:** Single bakery. No `bakery_id` foreign key on any table. The `bakeries` table holds one config row only.
+**Scope:** Single bakery. No `bakery_id` foreign key on any table. The `bakery_settings` table holds one config row only.
 
 ---
 
@@ -25,34 +25,41 @@ Every entity that exists in the system (single bakery scope, no multi-tenancy):
 
 | Entity | Description | Table Name |
 |---|---|---|
-| Bakery Profile | Single bakery config (name, hours, location type) — 1 row | `bakeries` |
+| Bakery Settings | Single bakery config (name, hours, location type) — 1 row | `bakery_settings` |
 | User / Staff | Login accounts for dashboard access | `users` (Supabase Auth) |
 | Bread Category | Canonical bread types tracked | `bread_categories` |
 | Recipe | Per-category ingredient requirements | `recipes` |
 | Ingredient | Raw materials tracked in inventory | `ingredients` |
 | Inventory Snapshot | Current stock level of each ingredient | `inventory` |
+| Inventory Batch | FIFO/expiry stock lots per ingredient | `inventory_batches` |
+| Historical Daily Sales | Validated category/day units sold with `DataOrigin` provenance | `daily_sales_records` |
 | Daily Prediction | ML output per category per day | `daily_predictions` |
+| Production Decision | Manager's selected production option before baking | `production_decisions` |
 | Daily Production | What was actually produced per category | `daily_production` |
 | Sales Transaction | Individual sale (from POS simulation) | `sales_transactions` |
 | Sales Time Slot | Morning / Afternoon / Evening aggregation | `sales_by_timeslot` (VIEW) |
-| End-of-Day Summary | Daily aggregated results per category | `daily_results` |
+| Completed Simulation Result | Detailed POS simulation result per category/day | `daily_results` |
 | Donation Record | Leftover donation to charity | `donations` |
+| Waste Record | Manager-confirmed disposal quantity and reason | `waste_records` |
 | Charity Partner | Organization receiving donations | `charity_partners` |
 | Weather Record | Daily weather snapshot from API | `weather_records` |
 | Calendar Event | Holiday / event status from Calendar API | `calendar_events` |
 | ML Model Version | Trained model metadata | `ml_model_versions` |
+| Model Evaluation | Origin-labelled chronological-holdout metrics | `model_evaluations` |
 | Feature Importance | Per-model feature weights | `feature_importance` |
 | System Log | Operational audit trail | `system_logs` |
+| Notification | Manager-visible alert (low-stock, stock-out, low-confidence, job failure, donation) | `notifications` |
+| FCM Token | Per-device push token for Firebase Cloud Messaging | `fcm_tokens` |
 
 ---
 
 ## 4. Database Schema (Supabase / PostgreSQL)
 
-> **No `bakery_id` FK on any table.** The `bakeries` table is a standalone config table with one row. All other tables belong to the single bakery implicitly.
+> **No `bakery_id` FK on any table.** The `bakery_settings` table is a standalone config table with one row. All other tables belong to the single bakery implicitly.
 
 ### 4.1 Core Domain Tables
 
-#### `bakeries` (config — 1 row only)
+#### `bakery_settings` (config — 1 row only)
 | Column | Type | Constraint | Notes |
 |---|---|---|---|
 | id | uuid | PK, default gen_random_uuid() | |
@@ -71,6 +78,7 @@ Every entity that exists in the system (single bakery scope, no multi-tenancy):
 | name | text | NOT NULL | e.g. "Croissants" |
 | display_order | int | NOT NULL | For UI ordering |
 | shelf_life_hours | int | NOT NULL, default 24 | |
+| selling_price | numeric | NOT NULL, default 0 | Standard retail price per unit (RM). **Reporting only** — never read by prediction/recommendation optimisation. |
 | is_active | boolean | NOT NULL, default true | Soft-delete |
 
 Unique: `(name)`.
@@ -80,10 +88,13 @@ Unique: `(name)`.
 |---|---|---|---|
 | id | uuid | PK | |
 | name | text | NOT NULL | e.g. "Flour", "Butter", "Sugar", "Yeast", "Salt" |
-| unit | text | NOT NULL | e.g. "g", "kg", "ml", "units" |
+| unit | text | NOT NULL | **Commercial bulk unit** (e.g. "kg" for flour/butter, "g" for yeast/salt). NOT the storage unit. Recipes remain in `grams_per_unit`; inventory remains in `quantity_grams`. |
+| unit_cost | numeric | NOT NULL, default 0 | Cost per bulk `unit` (e.g. RM28.00 per kg of butter). **Reporting only** — never read by prediction/recommendation optimisation. |
 | reorder_threshold | numeric | | Alert when stock falls below |
 
 Unique: `(name)`.
+
+> **Unit conversion (finance-only):** ingredient cost per gram = `unit_cost / gramsPerBaseUnit(unit)` where `gramsPerBaseUnit('kg')=1000`, `'g'=1`, `'ml'=1`. Used ONLY by `ingredientCostCalculator` (Module 3 reporting helper). Inventory deduction and recipe math continue to use `grams_per_unit` / `quantity_grams` directly.
 
 #### `recipes`
 | Column | Type | Constraint | Notes |
@@ -106,16 +117,82 @@ Unique: `(bread_category_id, ingredient_id)`.
 
 Unique: `(ingredient_id)`.
 
+#### `inventory_batches`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| ingredient_id | uuid | FK → ingredients.id, NOT NULL | |
+| received_date | date | NOT NULL | When the batch was added |
+| expiry_date | date | NOT NULL | Used for FIFO/FEFO deduction |
+| initial_quantity_grams | numeric | NOT NULL | Original batch quantity |
+| remaining_quantity_grams | numeric | NOT NULL | Remaining usable quantity |
+| source | text | | Optional supplier/source note |
+| status | text | NOT NULL, default `active` | `active`, `depleted`, `expired`, `discarded` |
+| created_at | timestamptz | NOT NULL, default now() | |
+
+Indexes: `(ingredient_id, expiry_date, received_date)`, `(status, expiry_date)`.
+
+**FIFO rule:** production deduction consumes the oldest non-expired active batch first, ordered by `expiry_date`, then `received_date`. The `inventory.quantity_grams` row remains a cached total for fast dashboard/low-stock checks and is updated whenever batches change.
+
 #### `inventory_log`
 | Column | Type | Constraint | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
 | inventory_id | uuid | FK → inventory.id | |
+| batch_id | uuid | FK → inventory_batches.id | Optional; filled when a specific FIFO batch is affected |
 | change_grams | numeric | NOT NULL | Positive = restock, negative = used |
 | reason | text | NOT NULL | "daily_production", "manual_restock", "spoilage" |
+| effective_date | date | NOT NULL | Business date of the movement; used to reconstruct stock for historical as-of reruns |
+| created_at | timestamptz | NOT NULL, default now() |
+
+#### `notifications`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK, default gen_random_uuid() | |
+| type | text | NOT NULL | `stock_out` \| `low_stock` \| `low_confidence` \| `prediction_reminder` \| `simulation_reminder` \| `donation_completed` |
+| severity | text | NOT NULL | `info` \| `warning` \| `critical` |
+| title | text | NOT NULL | Short alert title |
+| message | text | NOT NULL | Human-readable body |
+| related_id | uuid | NULL | Polymorphic FK: ingredient_id, prediction_id, donation_id; NULL for reminder-only notifications |
+| is_read | boolean | NOT NULL, default false | Set true when user dismisses |
 | created_at | timestamptz | NOT NULL, default now() | |
 
+Index: `(is_read, created_at DESC)` — dashboard unread-first listing.
+RLS: realtime publication enabled (for Flutter live subscription).
+
+#### `fcm_tokens`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK, default gen_random_uuid() | |
+| user_id | uuid | FK → auth.users.id, NOT NULL | Which staff account this device belongs to |
+| token | text | NOT NULL, UNIQUE | Firebase Cloud Messaging device token |
+| device_info | text | NULL | Optional label (e.g. "Pixel 7", "iPad") |
+| created_at | timestamptz | NOT NULL, default now() | |
+| updated_at | timestamptz | NOT NULL, default now() | |
+
+Notes:
+- One user may have multiple rows (logged in on phone + tablet) — `sendEachMulticast` broadcasts to all.
+- On logout, Flutter calls `DELETE /api/fcm/unregister` so former staff stop receiving alerts.
+- Firebase rotates tokens periodically → Flutter's `onTokenRefresh` re-registers via `POST /api/fcm/register`.
+
 ### 4.2 Prediction & Results Tables
+
+#### `daily_sales_records`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| sales_date | date | NOT NULL | Observation date |
+| bread_category_id | uuid | FK → bread_categories.id, NOT NULL | |
+| units_sold | int | NOT NULL, CHECK >= 0 | Current prediction/training target |
+| data_origin | text | NOT NULL, CHECK allowed values | `ACTUAL_TRANSACTION`, `IMPORTED_HISTORICAL`, `SIMULATION_GENERATED` |
+| is_validated | boolean | NOT NULL, default false | Only validated rows are suitable for ML |
+| source_reference_id | uuid | NULL | For simulation rows, references the source `daily_results.id`; import/actual provenance may use an external reference |
+| validation_notes | text | NULL | |
+| created_at | timestamptz | NOT NULL, default now() | |
+
+Unique: `(sales_date, bread_category_id, data_origin, source_reference_id)`.
+
+`DailySalesRecord` is the only canonical historical-sales record used by prediction, training and evaluation. A successful POS simulation creates one validated row per category with `data_origin = SIMULATION_GENERATED`. Simulation-generated rows may be used for development training, but any evaluation containing them must be labelled simulation-based and not presented as real-world accuracy.
 
 #### `weather_records`
 | Column | Type | Constraint | Notes |
@@ -148,13 +225,41 @@ Unique: `(date, event_type)`.
 | id | uuid | PK | |
 | target_date | date | NOT NULL | The day being predicted FOR |
 | bread_category_id | uuid | FK → bread_categories.id, NOT NULL | |
-| predicted_demand | int | NOT NULL | Units predicted |
-| confidence | numeric | NOT NULL, CHECK 0-100 | Percentage |
+| predicted_units_sold | int | NOT NULL | Units predicted to be sold |
+| confidence | numeric | NOT NULL, CHECK 0-100 | Model confidence/stability score |
 | model_version_id | uuid | FK → ml_model_versions.id | Which model made this |
 | weather_record_id | uuid | FK → weather_records.id | Weather data used |
 | created_at | timestamptz | NOT NULL, default now() | |
 
 Unique: `(target_date, bread_category_id)`.
+
+#### `production_decisions`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| target_date | date | NOT NULL | Production date being decided |
+| bread_category_id | uuid | FK → bread_categories.id, NOT NULL | |
+| prediction_id | uuid | FK → daily_predictions.id | Prediction used for decision |
+| predicted_units_sold | int | NOT NULL | Snapshot from ML output |
+| recommended_production | int | NOT NULL | Snapshot after inventory/recipe constraints |
+| max_producible | int | NOT NULL | Feasibility limit calculated from recipe + inventory at confirmation time |
+| final_selected_qty | int | NOT NULL | Manager-approved quantity to bake |
+| selected_option | text | NOT NULL | `full_prediction`, `reduced_due_constraint`, `manual_override` |
+| decision_reason | text | Required unless `selected_option = full_prediction` | e.g. "yeast shortage", "staff shortage", "manager override" |
+| confirmed_by | uuid | FK → auth.users.id | Manager account that confirmed the decision |
+| confirmed_at | timestamptz | NOT NULL, default now() | Confirmation time |
+| created_at | timestamptz | NOT NULL, default now() | |
+| updated_at | timestamptz | NOT NULL, default now() | |
+
+Unique: `(target_date, bread_category_id)`.
+
+Rules:
+- `final_selected_qty` must be between 0 and `max_producible`.
+- `full_prediction` means the final quantity matches `recommended_production`.
+- `reduced_due_constraint` means the final quantity is lower than `recommended_production`.
+- A reason is required for `reduced_due_constraint` and `manual_override`.
+- Confirming a production decision does not deduct inventory; inventory is deducted only when production/simulation is recorded.
+- Each confirmation/update writes an audit event to `system_logs`.
 
 #### `daily_production`
 | Column | Type | Constraint | Notes |
@@ -162,6 +267,7 @@ Unique: `(target_date, bread_category_id)`.
 | id | uuid | PK | |
 | production_date | date | NOT NULL | |
 | bread_category_id | uuid | FK → bread_categories.id, NOT NULL | |
+| production_decision_id | uuid | FK → production_decisions.id | Links to manager decision, if recorded |
 | recommended_qty | int | NOT NULL | What system recommended |
 | actual_produced | int | NOT NULL | What was actually baked |
 | adjustment_reason | text | | e.g. "yeast_shortage", "override" |
@@ -198,13 +304,27 @@ Index: `(sale_date, time_slot)` for aggregations.
 | prediction_id | uuid | FK → daily_predictions.id | Links to what was predicted |
 | predicted | int | NOT NULL | Snapshot of prediction |
 | produced | int | NOT NULL | Snapshot of production |
-| sold | int | NOT NULL | Sum from sales_transactions |
+| units_sold | int | NOT NULL | Sum from sales_transactions |
 | leftover | int | NOT NULL | produced - sold |
+| remaining_unallocated_leftover | int | NOT NULL | leftover - confirmed donations - confirmed waste |
+| estimated_demand | int | | units_sold + lost_sales; analysis only |
+| lost_sales | int | DEFAULT 0 | max(0, estimated_demand - produced) when stock-out occurs |
 | waste_rate_pct | numeric | | (leftover / produced) * 100 |
 | error_units | int | | produced - sold |
 | error_pct | numeric | | prediction accuracy |
+| notes | text | | Optional manual correction / stock-out note |
 
 Unique: `(result_date, bread_category_id)`.
+
+**Column relationships (after POS simulation):**
+```
+estimated_demand = units_sold + lost_sales              ← analysis only, not ML target
+units_sold       ≤ produced                              ← capped at production
+leftover         = produced - units_sold                ← always ≥ 0
+remaining_unallocated_leftover = leftover - donated - wasted
+waste_rate   = (leftover / produced) × 100
+error_pct    = |predicted_units_sold - units_sold| / units_sold × 100
+```
 
 ### 4.3 Donation Tables
 
@@ -220,13 +340,31 @@ Unique: `(result_date, bread_category_id)`.
 | Column | Type | Constraint | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
+| daily_result_id | uuid | FK → daily_results.id, NOT NULL | Source leftover allocation |
 | charity_partner_id | uuid | FK → charity_partners.id, NOT NULL | |
 | donation_date | date | NOT NULL | |
-| bread_category_id | uuid | FK → bread_categories.id | Can be null if mixed |
+| bread_category_id | uuid | FK → bread_categories.id, NOT NULL | Donation is category-specific |
 | quantity | int | NOT NULL | |
 | status | text | NOT NULL | "recorded", "picked_up", "delivered" |
+| confirmed_by | uuid | FK → auth.users.id, NOT NULL | Bakery Manager who confirmed |
 | notes | text | | |
 | created_at | timestamptz | NOT NULL, default now() | |
+
+The system may recommend a donation, but it must not insert this row until the Bakery Manager confirms it.
+
+#### `waste_records`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| daily_result_id | uuid | FK → daily_results.id, NOT NULL | Source leftover allocation |
+| waste_date | date | NOT NULL | |
+| bread_category_id | uuid | FK → bread_categories.id, NOT NULL | Waste is category-specific |
+| quantity | int | NOT NULL, CHECK > 0 | |
+| disposal_reason | text | NOT NULL | Required reason |
+| confirmed_by | uuid | FK → auth.users.id, NOT NULL | Bakery Manager who confirmed |
+| created_at | timestamptz | NOT NULL, default now() | |
+
+Donation plus waste for a result/category must not exceed `daily_results.leftover`; updates maintain `remaining_unallocated_leftover`. The service executes the allocation validation and related writes transactionally through Node.js Repos.
 
 ### 4.4 ML & System Tables
 
@@ -235,16 +373,36 @@ Unique: `(result_date, bread_category_id)`.
 |---|---|---|---|
 | id | uuid | PK | |
 | version | int | NOT NULL | Auto-increment |
+| bread_category_id | uuid | FK → bread_categories.id, NOT NULL | One model row per category |
 | model_type | text | NOT NULL | "random_forest", "linear_regression" |
 | file_path | text | NOT NULL | Path to serialized model file |
 | training_start | date | | Date range used for training |
 | training_end | date | | |
-| mape | numeric | | Evaluation metric |
-| r_squared | numeric | | Evaluation metric |
-| is_active | boolean | NOT NULL, default false | Which model serves predictions |
+| lifecycle_status | text | NOT NULL, default `candidate` | `candidate`, `active`, `inactive`, `rejected` |
+| activated_by | uuid | FK → auth.users.id | Administrator |
+| activated_at | timestamptz | NULL | |
 | created_at | timestamptz | NOT NULL, default now() | |
 
-Unique: `(version)`.
+Unique: `(version, bread_category_id)`.
+
+Retraining always creates a candidate. Only the System Administrator may activate an evaluated candidate or restore a previous valid inactive version. At most one model version per category is active.
+
+#### `model_evaluations`
+| Column | Type | Constraint | Notes |
+|---|---|---|---|
+| id | uuid | PK | |
+| model_version_id | uuid | FK → ml_model_versions.id, NOT NULL | Candidate/existing version evaluated |
+| holdout_start | date | NOT NULL | Chronologically later than the training period |
+| holdout_end | date | NOT NULL | |
+| data_origins | text[] | NOT NULL | Origins present in holdout rows |
+| evaluation_label | text | NOT NULL | Explicitly identifies real/imported/simulation-based/mixed evidence |
+| mae | numeric | NOT NULL | Includes zero-actual observations |
+| rmse | numeric | NOT NULL | Includes zero-actual observations |
+| mape | numeric | NULL | Excludes only zero-actual observations |
+| r_squared | numeric | NULL | |
+| sample_count | int | NOT NULL | All holdout rows |
+| mape_sample_count | int | NOT NULL | Non-zero-actual rows used by MAPE |
+| evaluated_at | timestamptz | NOT NULL, default now() | |
 
 #### `feature_importance`
 | Column | Type | Constraint | Notes |
@@ -259,7 +417,7 @@ Unique: `(version)`.
 | Column | Type | Constraint | Notes |
 |---|---|---|---|
 | id | uuid | PK | |
-| event_type | text | NOT NULL | "prediction_request", "model_retrain", "api_error", "donation_created" |
+| event_type | text | NOT NULL | "prediction_request", "model_retrain", "operation_reminder_sent", "api_error", "donation_created" |
 | payload | jsonb | | Structured event data |
 | severity | text | NOT NULL | "info", "warn", "error" |
 | created_at | timestamptz | NOT NULL, default now() | |
@@ -324,15 +482,23 @@ These are shared across ALL modules. Defined once here.
 ]
 ```
 
-### 5.6 Season Multipliers
+### 5.6 Monsoon Season Multipliers (Malaysia)
 ```json
 [
-  { "season": "spring", "months": [3,4,5],  "multiplier": 1.05 },
-  { "season": "summer", "months": [6,7,8],  "multiplier": 0.90 },
-  { "season": "autumn", "months": [9,10,11],"multiplier": 1.08 },
-  { "season": "winter", "months": [12,1,2], "multiplier": 1.15 }
+  { "season": "northeast_monsoon", "months": [11,12,1,2,3], "multiplier": 0.90 },
+  { "season": "inter_monsoon",     "months": [4,10],        "multiplier": 0.98 },
+  { "season": "southwest_monsoon", "months": [5,6,7,8,9],   "multiplier": 1.05 }
 ]
 ```
+
+### 5.7 Configurable Prediction Controls
+
+- `minimum_training_days = 30`
+- `low_confidence_threshold_pct = 75`
+- Cold-start base units per bread category
+- Cold-start weather, holiday, weekday and seasonal adjustment factors
+
+These are initial configurable values, not hard-coded formulas. The final confidence formula remains subject to approval; Random Forest tree variance/model agreement is the planned basis.
 
 ---
 
@@ -347,32 +513,37 @@ These are shared across ALL modules. Defined once here.
 | Ingredients (5 rows) | 5 | Canonical ingredients |
 | Recipes (4*5 = 20 rows) | 20 | Ingredient per unit per category |
 | Charity partners (2-3 rows) | 3 | Default charities |
-| Weather records (30 days) | 30 | Historical weather (can use real API or synthetic) |
-| Calendar events (30 days) | ~5 | Holidays/events in the range |
-| Daily results (30 days, 4 categories) | 120 | Synthetic historical sales for cold-start ML |
-| Inventory starting stock | 5 | Initial ingredient levels |
+| Weather records (90 days) | 90 | Historical weather (can use real API or synthetic) |
+| Calendar events (90 days) | ~10-15 | Holidays/events in the range |
+| Daily sales records (90 days, 4 categories) | 360 | Synthetic development history marked `SIMULATION_GENERATED` |
+| Daily results (90 days, 4 categories) | 360 | Detailed synthetic simulation outcomes linked to the generated history |
+| Production decisions (90 days, 4 categories) | 360 | Synthetic manager decisions for POS simulation |
+| Inventory starting stock | 5 | Initial ingredient snapshot totals |
+| Inventory starting batches | 5-10 | FIFO lots behind the inventory snapshot |
 
-Total seed rows: ~200. All synthetic, generated by a seed script.
+Total seed rows: ~505+ plus generated sales transactions. All synthetic, generated by a seed script.
 
 ### 6.2 Synthetic Historical Data Approach
 
-**30-day bootstrap period:**
-- Dates: 30 consecutive days ending "yesterday"
+**90-day bootstrap period:**
+- Dates: 90 consecutive days ending "yesterday"
 - For each day, generate sales per category using time-slot distribution:
   - Apply day-of-week multiplier to base demand (e.g. 100 * 1.15 for Friday)
   - Apply weather multiplier from weather_records
   - Apply calendar event multiplier if holiday
   - Add gaussian noise (±10%) for realism
   - Record: produced (predicted + 5% buffer), sold, leftover
-- This gives the ML model 30 days of "realistic but fake" data to start
-- After go-live, real data replaces/grows from this
+- This gives the ML model enough "realistic but fake" data for weekday/weather evaluation while keeping the FYP seed manageable
+- Each synthetic category/day result produces a validated `daily_sales_records` row with `data_origin = SIMULATION_GENERATED`
+- Development evaluation on these records is labelled simulation-based; it is not reported as real-world accuracy
+- After go-live, `ACTUAL_TRANSACTION` and validated `IMPORTED_HISTORICAL` records provide real/imported evidence without overwriting provenance
 
 ### 6.3 Seed Script Location
 
-`fyp/backend/supabase/seed/` — a Node.js or Python script that:
+`fyp/backend/supabase/seed/` — a Node.js script that:
 1. Reads canonical constants from a shared config file
 2. Inserts rows into Supabase
-3. Generates synthetic 30-day history
+3. Generates synthetic 90-day history
 4. Idempotent (can be re-run safely)
 
 ---
@@ -411,22 +582,23 @@ fyp/
 
 | Module | Reads Tables | Writes Tables |
 |---|---|---|
-| Node.js Middleware | ALL (orchestrates queries) | inventory_log, system_logs, donations |
-| Python ML Server | daily_results, weather_records, calendar_events, bread_categories | daily_predictions, ml_model_versions, feature_importance |
-| POS Simulation | daily_predictions, bread_categories, weather_records, calendar_events | sales_transactions, daily_production, daily_results |
-| Leftover Donation | daily_results, charity_partners | donations |
-| Flutter Dashboard | daily_predictions, daily_results, inventory, recipes | (none — read only) |
-| External API Adapters | — | weather_records, calendar_events |
+| Node.js/Express through TypeScript Repos | ALL application tables | All application tables according to service rules |
+| Python FastAPI ML Server | None directly; receives validated DTOs from TypeScript | None directly; returns prediction/training/evaluation DTOs |
+| POS Simulation TypeScript Services | daily_predictions, production_decisions, bread_categories and traceability context through Repos | sales_transactions, daily_production, daily_results, daily_sales_records through Repos |
+| Leftover Management TypeScript Services | daily_results, charity_partners, donations, waste_records through Repos | donations, waste_records and remaining allocation through Repos |
+| Flutter Views | No PostgreSQL tables directly; use Express APIs | No PostgreSQL tables directly |
+| External API Adapters | No tables directly | Return provider data to ContextService, which caches through Repos |
 
 ---
 
-## 9. RLS Policies (Single-Bakery)
+## 9. RLS and Database-Access Policy (Single Bakery)
 
-Since this is a single bakery with no `bakery_id` scoping, RLS simplifies to:
-- All tables: only authenticated users can read/write
-- `USING (auth.role() = 'authenticated')`
-- No bakery-scoping needed — all data belongs to the one bakery
-- Supabase Auth handles user login; `users` table via `auth.users`
+- Supabase Authentication handles login/session issuance through its authentication API.
+- Flutter does not receive direct CRUD policies for application tables.
+- Node.js/Express is the sole application-database owner and accesses PostgreSQL through TypeScript Repos using protected server credentials.
+- FastAPI has no Supabase credentials.
+- RLS remains enabled as defence in depth; direct `authenticated` client CRUD on application tables is denied unless a narrowly scoped future requirement is explicitly approved.
+- No bakery-scoping predicate is needed because all data belongs to the single bakery.
 
 ---
 
@@ -441,6 +613,10 @@ Since this is a single bakery with no `bakery_id` scoping, RLS simplifies to:
 | 5 | **Timezone handling** | Store in UTC + bakery.timezone offset | Standard practice, avoids ambiguity |
 | 6 | **Supabase local dev vs cloud** | Local Docker for dev | Free, offline, fast iteration, reset anytime |
 | 7 | **Migration tool** | Supabase CLI migrations | Standard for Supabase, integrates with local Docker |
+| 8 | **Background push mechanism** | Firebase Cloud Messaging (FCM) through a Node.js external-service adapter | Required for staff phones to receive alerts when the app is closed/backgrounded. Node reads device tokens through `FcmTokenRepo` and broadcasts without exposing database access to Flutter or FastAPI. |
+| 9 | **Foreground live updates** | Authenticated Node.js API plus optional SSE/WebSocket relay | Updates the Flutter bell badge while the app is open. Node may observe relevant database changes internally, but Flutter never subscribes to a Supabase table directly. Hybrid delivery remains Node foreground delivery + FCM background push. |
+| 10 | **Notification dedupe** | Skip emit if unread alert of same `type + related_id` exists | Prevents alert spam (e.g. repeated low-stock for same ingredient). Once read, a new occurrence can alert again. |
+| 11 | **FIFO inventory** | Lightweight batch tracking with expiry dates | Realistic for perishable bakery ingredients while still feasible for an FYP. `inventory` stores totals; `inventory_batches` stores the FIFO lots. |
 
 ---
 
@@ -451,8 +627,8 @@ When we drill into this module, we will produce:
 2. **`constants.json`** — shared canonical constants file
 3. **`seed.js`** — Node.js seed script with synthetic data generation
 4. **TypeScript type definitions** — Zod schemas matching DB schema (for Node.js validation)
-5. **Python Pydantic models** — mirroring schema (for FastAPI)
-6. **Dart data classes** — mirroring schema (for Flutter)
+5. **Python Pydantic models** — only the versioned prediction/training/evaluation API DTOs required by FastAPI, not database-row models
+6. **Dart data classes** — API response/request models needed by Flutter Views, not direct database bindings
 
 See `README.md` in this folder for the full detailed plan.
 

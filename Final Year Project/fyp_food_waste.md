@@ -2,6 +2,22 @@
 
 **Final Year Project (FYP) – Comprehensive Documentation**
 
+## July 2026 requirements revision (authoritative)
+
+This master concept document contains early illustrative examples. The following approved decisions supersede any conflicting example later in the file:
+
+- `DailySalesRecord` is the validated historical-sales record. `DataOrigin` is `ACTUAL_TRANSACTION`, `IMPORTED_HISTORICAL` or `SIMULATION_GENERATED`; the training target is `unitsSold`.
+- `DailyResult` remains the detailed result of a completed POS simulation. A successful category result creates a validated `SIMULATION_GENERATED` `DailySalesRecord`. Development training may use it, but simulation-based evaluation is never presented as real-world accuracy.
+- `lostSales` and `estimatedDemand` are analytical fields, not training targets. The former censored-demand target proposal in Section 6.1 is retired for the current model.
+- The System Administrator manually initiates training. Retraining produces candidates; chronological holdout evaluation uses MAE, RMSE, MAPE and R²; zero actuals are excluded only from MAPE. Activation is explicit and a previous valid version can be restored.
+- `ColdStartService` applies with fewer than 30 suitable records, using configurable base values/context factors. `ConfidenceService` retains Random Forest tree variance/model agreement as the planned basis, but no final formula is approved; the configurable low-confidence threshold starts at 75%.
+- POS simulation uses the stored `DailyPrediction` baseline and never reapplies context already included in it. It validates production/inventory, deducts FIFO exactly once before sales, and rolls back/reverses deduction on later failure.
+- The system recommends donation/waste; the Bakery Manager confirms and records it. Add category-specific `WasteRecord`; donation plus waste cannot exceed leftovers, and remaining unallocated leftover is maintained.
+- Weekly reports with PDF/CSV export, user/access management, settings, audit logs, notifications, device tokens and FCM remain planned.
+- Node.js/Express alone accesses Supabase PostgreSQL through `Repo` classes. FastAPI receives validated DTOs and returns ML results. Express routers/FastAPI routes are thin modules.
+
+Any later passage that describes estimated demand as the current target, direct FastAPI/Supabase access, double context multiplication, automatic donation, immediate model activation or a fixed confidence formula is historical and must not be implemented.
+
 ---
 
 ## 📌 1. Introduction
@@ -29,6 +45,16 @@ The system is built around **ONE MAIN OBJECTIVE:**
 
 ### Overall Vision
 **"Build a smart demand prediction engine that learns from daily operations to minimize overproduction and waste."**
+
+### Core Philosophy: Finance is Reporting-Only
+
+Financial and profit metrics exist in this system **strictly for reporting and visualisation** to show bakery owners the business value of reducing waste. They must **NOT** be used to optimise production, change ingredient choices, or feed any decision that affects how much bread is made.
+
+- The ML model trains on **units sold / estimated demand**, never on price or cost.
+- The Smart Recommendation Engine decides production using **predicted demand + ingredient availability in grams** — never prices.
+- Financial numbers (`selling_price`, `unit_cost`, `revenue`, `ingredient_cost`, `gross_profit`) are read only by dashboard/reporting services.
+
+**Why:** The system's job is to *reduce waste via accurate prediction*. The profit figures *prove* that this works (less waste → higher gross profit), but they must never become an objective the optimiser chases. Mixing finance into optimisation would change what the project is.
 
 ---
 
@@ -125,7 +151,41 @@ When?: Today evening (or early morning before production)
 
 ---
 
-## 🧩 4. System Architecture
+### 3.1 Financial Reporting (Reporting-Only, Crucial for Business Value)
+
+**Role:** Show the bakery owner that reducing waste improves profit. **Never** drive optimisation.
+
+```
+WHAT'S TRACKED:
+ ├─ bread_categories.selling_price      (standard retail price per unit, RM)
+ ├─ ingredients.unit + unit_cost         (bulk commercial unit + cost per bulk unit, e.g. RM28/kg butter)
+ ├─ sales_transactions.unit_price       (SNAPSHOT — price at sale moment, so old history stays accurate when selling_price changes)
+ ├─ sales_transactions.subtotal          (quantity × unit_price)
+ ├─ daily_results.revenue               (SUM of subtotals for the day — cached for fast charts)
+ ├─ daily_results.ingredient_cost       (cost of all PRODUCED units — sold + wasted/donated)
+ └─ daily_results.gross_profit           (revenue − ingredient_cost)
+
+UNIT CONVERSION (ingredient cost):
+ ├─ flour:  unit "kg", unit_cost RM6.00  → cost_per_gram = 6.00 / 1000 = RM0.006/g
+ ├─ butter: unit "kg", unit_cost RM28.00 → cost_per_gram = 28.00 / 1000 = RM0.028/g
+ └─ Croissant ingredient cost = (80g flour × 0.006) + (15g butter × 0.028) + ... = RM0.48 + RM0.42 + ... = RM0.90/unit
+
+GROSS PROFIT RULE (KEY DESIGN DECISION):
+ ├─ Gross Profit = Revenue − Ingredient Cost of PRODUCED items
+ ├─ "Produced" (not "sold") is deliberate: wasted & donated bread's ingredient cost still counts.
+ ├─ Effect: a high-waste day shows lower gross profit even when revenue looked fine.
+ └─ This visually proves the thesis: less waste → better profit.
+
+STRICT SEPARATION:
+ ├─ ML Model: trains on DailySalesRecord.unitsSold. NEVER touches price/cost.
+ ├─ Smart Recommendation: balances demand vs ingredient grams. NEVER touches price/cost.
+ └─ Dashboard Financial View: reads the cache + dual-axis chart (waste_rate vs gross_profit over time).
+     As waste falls, profit visibly rises → proves system value.
+```
+
+> **One-line viva answer:** "Finance is read-only in this system. Prices and costs are stored and reported so the owner can see that reducing waste raises gross profit — but they never feed the prediction or recommendation engine. The optimiser works entirely in units and grams."
+
+--- 🧩 4. System Architecture
 
 The system is organized around **ONE CORE MODULE** (Prediction) with supporting components:
 
@@ -340,6 +400,8 @@ If unable to source more supplies:
 ---
 
 #### 🎯 4.1.4 What is Prediction Confidence?
+
+> **Revised interpretation:** Confidence is an advisory model-agreement indicator owned by `ConfidenceService`, with Random Forest tree variance/model agreement as the planned basis. The final mathematical mapping is not approved. Statements such as “X% sure” and numerical mappings below are early explanatory examples, not implementable formulas. The configurable low-confidence threshold initially equals 75%.
 
 **Confidence Level:** The model's certainty about its prediction (0-100%)
 
@@ -714,7 +776,9 @@ CATEGORY INCLUDED:
 
 #### 4.3.1 How POS Simulation Works
 
-**Key Features: Weather-Based + Calendar-Based Realism**
+> **Revised simulation rule:** Use the stored `DailyPrediction` as the baseline. Do not reapply weather, holiday, season or other contextual multipliers already incorporated into it. Context may be retrieved for traceability/display. The detailed weather/holiday multiplier narrative below is a retired early example.
+
+**Historical Example: Weather-Based + Calendar-Based Realism (retired; do not implement as double multiplication)**
 
 The simulation uses the **same Weather API and Google Calendar API as the Prediction System** to generate realistic sales patterns based on actual weather and holidays.
 
@@ -901,6 +965,8 @@ System records:
 **No discounting needed** - focus on social responsibility
 
 #### 4.4.1 Donation Process
+
+> **Revised allocation rule:** The system recommends an action, but the Bakery Manager confirms every category-specific `Donation` or `WasteRecord`. No automatic donation is created. Confirmed donation plus waste cannot exceed available leftovers, and the remaining unallocated quantity is maintained.
 
 ```
 END OF DAY WORKFLOW:
@@ -1193,10 +1259,10 @@ IF actual sales < 70% of prediction:
 ### 🌇 Evening (End of Day - 6:00 PM)
 
 ```
-END-OF-DAY RECORDING (AUTO-GENERATED FROM SIMULATION):
+END-OF-DAY RECORDING (GENERATED AFTER MANAGER RUNS SIMULATION):
 
-The system automatically compiles results from the entire day's 
-POS simulation without manual input:
+After the manager presses Run Today's POS Simulation, the system
+compiles results from the simulated sales day:
 
 ┌─────────────────────────────────────────┐
 │ FINAL DAILY REPORT (System Generated)   │
@@ -1210,9 +1276,8 @@ POS simulation without manual input:
 │ (Aggregated from morning/afternoon/     │
 │  evening simulation transactions)       │
 │                                         │
-│ Total Donated: 18 units                 │
-│ └─ Charity: City Food Bank              │
-│ └─ Waste prevented: ✅                  │
+│ Remaining Unallocated: 18 units         │
+│ (until manager confirms donation/waste) │
 │                                         │
 │ Waste Rate: 6.7%                        │
 │                                         │
@@ -1230,14 +1295,13 @@ DATA COLLECTED BY SYSTEM:
 ├─ Inventory levels at each time window
 ├─ Waste calculation per category
 ├─ All factors that affected sales (weather, holiday, time patterns)
-└─ Confidence level: 100% (pure simulation, not estimated)
+└─ Data origin: SIMULATION_GENERATED
 
-DONATION TRACKING:
-├─ 18 units automatically marked for donation
-├─ Charity: City Food Bank
-├─ Time: 6:00 PM (at closing)
-├─ Status: Recorded in database
-└─ Social Impact: 18 meals provided ✅
+LEFTOVER ALLOCATION:
+├─ System recommends donation or waste by category
+├─ Bakery Manager confirms quantity and action
+├─ Donation requires active charity; waste requires disposal reason
+└─ Donation + waste ≤ leftover; remaining unallocated is maintained
 ```
 
 ---
@@ -1245,23 +1309,24 @@ DONATION TRACKING:
 ### 🌙 Night (After Closing - After 6:00 PM)
 
 ```
-ML MODEL LEARNING:
+DEVELOPMENT DATA CAPTURE:
 
 System compares:
 ├─ Predicted: 120 croissants
 ├─ Actual: 115 croissants (from today's simulation)
 ├─ Error: -5 units (4% error)
 
-Model Updates:
-├─ Analyzes: Why was prediction close?
-├─ Factors today: Friday, sunny, no events
-├─ Updates: Weights adjusted for Friday + sunny pattern
-├─ Result: Tomorrow's prediction more accurate
+History update:
+├─ Create validated DailySalesRecord(unitsSold=115)
+├─ DataOrigin = SIMULATION_GENERATED
+├─ May support development training
+└─ Any evaluation using it is labelled simulation-based
 
-Learning loop:
-After 30 days → Model accuracy improves
-After 90 days → Model becomes highly specialized to this bakery
-After 1 year → Model achieves 92%+ accuracy ✅
+Model lifecycle:
+├─ No automatic update occurs
+├─ System Administrator manually trains a candidate
+├─ Candidate is evaluated on chronologically later holdout data
+└─ Administrator activates it only after review
 ```
 
 ---
@@ -1348,7 +1413,101 @@ AFTER 1 YEAR:
   Accuracy: 94%+ → specialized model for this bakery ✅
 ```
 
+### 6.1 Retired Alternative: Censored Demand Recovery
+
+> **Current approved target:** `DailySalesRecord.unitsSold`. The `estimated_demand = unitsSold + lostSales` proposal below is retained only as a rejected/possible future alternative. `estimatedDemand` and `lostSales` are analysis fields and must not be used as current training targets.
+
+**This is a critical ML design decision that prevents the model from gradually drifting toward underprediction.** It demonstrates understanding of a fundamental concept in demand forecasting: **the difference between observed sales and underlying customer demand.**
+
+#### The Problem: Training on Raw `sold` Causes Bias
+
+```
+SCENARIO: Monday Stock-Out
+
+Morning prediction:          120 croissants
+Inventory check:              only enough ingredients for 100
+Staff decides NOT to order more → bakery produces 100
+Customer demand (simulated): 120
+Sold:                        100   ← capped by production
+Lost sales:                  20    ← customers turned away
+Leftover:                    0
+
+WRONG training target (using `sold`):
+└─ Model sees: "Monday sold 100" → learns "Monday demand ≈ 100"
+└─ Over time, predicts ~100 for similar Mondays
+└─ Causes 16% systematic underprediction
+└─ Bakery keeps underproducing → keeps stocking out → bias reinforces itself
+```
+
+#### The Solution: Train on `estimated_demand = sold + lost_sales`
+
+```
+CORRECT training target (using `estimated_demand`):
+
+Date      Predicted  Produced  Sold  Lost_Sales  Estimated_Demand (training target)
+Monday    120        100       100   20          120  ← what customers actually wanted
+Tuesday   95         100       95    0           95   ← same as sold (no stock-out)
+Wednesday 110        110       110   0          110   ← same as sold (no stock-out)
+
+The model learns TRUE demand patterns, not constrained sales patterns.
+```
+
+#### Why This Matters
+
+| Concept | Without Correction (train on `sold`) | With Correction (train on `estimated_demand`) |
+|---|---|---|
+| What the model learns | "How many items did we sell?" | "How many items did customers want?" |
+| Behavior on stock-out days | Learns censored (capped) demand → underpredicts | Learns true underlying demand → predicts accurately |
+| Long-term accuracy trend | Drifts downward (self-reinforcing bias) | Stays unbiased (no systematic drift) |
+| Forecasting theory | Violates censored-data assumptions | Respects censored-data theory in demand forecasting |
+
+#### Implementation in the System
+
+```
+WHERE THE FIX LIVES (Python ML server — Module 2):
+
+1. trainingDataRepo.fetch_training_data():
+   └─ SELECT daily_results (sold, lost_sales)
+   └─ Compute estimated_demand = sold + lost_sales   ← row-level
+
+2. build_features() (training):
+   └─ All historical features (rolling_avg_30d, rolling_avg_7d,
+      same_weekday_avg, trend_7d, yesterday_demand) derived from
+      estimated_demand, NOT sold
+   └─ Training target y = estimated_demand   ← uncensored target
+
+3. predictionRepo.fetch_recent_sales(category_id, target_date): filters daily_results with result_date < target_date
+   └─ Returns estimated_demand column for prediction-time parity
+   
+4. build_prediction_features() (inference):
+   └─ Prediction-time historical features use estimated_demand
+   └─ Parity with training prevents train/serve skew
+
+EVERYWHERE ELSE: NO CHANGE
+├─ daily_results.demand column unchanged (still stored for simulation math)
+├─ POS simulation code unchanged (still computes sold/lost/demand correctly)
+├─ Donation uses leftover = produced - sold (true unsold qty, unaffected)
+├─ Smart Recommendation uses DailyPrediction.predictedUnitsSold (unaffected)
+└─ Linear Regression baseline benefits automatically (shares y_train)
+```
+
+#### Why This Is a Viva Highlight
+
+This single design decision demonstrates three concepts examiners look for in an ML FYP:
+
+1. **Censored data awareness** — Distinguishing observed outcomes (`sold`) from underlying phenomena (`demand`). The sales number is *not* the demand; it is the *minimum* of demand and supply.
+
+2. **Avoiding label bias vs. label leakage** — We use `lost_sales` only to *correct the target*, never as an input feature. This avoids label leakage (using the answer to predict the answer) while still correcting the censoring bias.
+
+3. **Production generalizability** — In a real bakery with no `demand` ground truth, this same `sold + lost_sales` formula works, because POS systems naturally record both fulfillment and stock-outs. The architecture does not depend on simulation-only fields.
+
+> **One-line viva answer:** "We train the model on estimated demand — sold plus lost sales — rather than raw observed sales, to recover the customer demand the model is supposed to forecast. Without this correction, the model would gradually learn censored sales patterns and systematically underpredict on any day where inventory shortages previously capped sales."
+
+---
+
 ### Model Evaluation Metrics
+
+Evaluation uses chronologically later holdout `DailySalesRecord` observations and reports MAE, RMSE, MAPE and R² with a data-origin label. Zero-actual observations remain in MAE and RMSE and are excluded only from MAPE. Any evaluation containing `SIMULATION_GENERATED` records is labelled simulation-based and is not evidence of real-world accuracy.
 
 ```
 MEASUREMENT CRITERIA:
@@ -1522,7 +1681,7 @@ YEARLY IMPACT:
 │  ✅ Security: Validates all requests                   │
 │  ✅ Business Logic: Manages recipes, donations, etc    │
 │  ✅ Orchestration: Coordinates multiple APIs           │
-│  ✅ Automation: Schedules daily learning tasks         │
+│  ✅ Reminders: Prompts manager at predefined times     │
 └──────┬────────────┬────────────┬────────────┬──────────┘
        │            │            │            │
        ↓            ↓            ↓            ↓
@@ -1542,11 +1701,13 @@ YEARLY IMPACT:
 | **ML Server** | Python (FastAPI) | REST API for prediction requests & model retraining |
 | **Database** | **Supabase (PostgreSQL)** | **Secure, real-time database with authentication** |
 | **Data Processing** | Pandas / NumPy | Data cleaning & feature engineering before ML |
-| **Scheduling & Automation** | Node-cron | Automatic end-of-day reports & ML model retraining |
+| **Operation Reminders** | Notification service / dashboard settings | Reminder notifications for manager-triggered prediction and simulation |
 | **Weather API** | OpenWeatherMap API | Real-time weather data for prediction & simulation |
 | **Calendar API** | Google Calendar API | Holiday/event detection for demand adjustment |
 | **Visualization** | Matplotlib / Plotly | Analytics charts & performance dashboards |
 | **Deployment** | AWS / Heroku | Production hosting for Node.js + Python services |
+
+**Database boundary:** Only Node.js/Express TypeScript `Repo` classes access Supabase PostgreSQL. Flutter uses Express APIs for application data, and FastAPI receives validated prediction/training/evaluation DTOs through `FastApiMlClient`. FastAPI route functions and Express router files remain thin modules.
 
 ---
 
@@ -1675,60 +1836,51 @@ const prediction = await sendToML({ weather, calendar });
 **Why This Matters for Your Viva:**
 > "Node.js is designed for non-blocking I/O. While a traditional synchronous system would sequentially call the Weather API, Calendar API, and ML service, Node.js calls them in parallel. This ensures the mobile application remains responsive and the overall system is scalable."
 
-#### 4️⃣ Handling the Learning Loop (Automated Scheduling & Retraining)
+#### 4️⃣ Handling the Daily Workflow (Manager-Controlled with Reminders)
 
 **The Problem:**
 ```
-❌ MANUAL: Someone has to remember to retrain the ML model
-   
-   Monday: "Oops, forgot to retrain the model!"
-   Tuesday: Using stale model
-   Wednesday: Data accumulating but not feeding back
-   Result: Model never improves ❌
+❌ TOO MUCH AUTOMATION FOR THE PROTOTYPE:
+   - A background scheduler complicates deployment.
+   - UAT participants may not want to wait for a fixed time.
+   - The viva demo needs predictable buttons, not hidden jobs.
+   - The core contribution is prediction + recommendation + simulation, not scheduling.
 ```
 
-**The Solution: Node.js Scheduled Automation (node-cron)**
+**The Solution: Reminder Notifications + Manual Triggers**
 ```
-✅ AUTOMATIC: Every night at 11:00 PM
+✅ MANAGER-CONTROLLED:
 
-Node.js Scheduler (Pseudo-code):
-cron.schedule('0 23 * * *', async () => {
-  // Every day at 11:00 PM:
-  
-  1. Compile end-of-day report
-     ├─ Collect: All today's sales data
-     ├─ Calculate: Waste rate, errors
-     └─ Store: In Supabase
-  
-  2. Send to Python ML Server
-     ├─ Message: "Retrain model with new data"
-     └─ Wait: For Python to finish retraining
-  
-  3. Update model version
-     ├─ Save: New trained model
-     └─ Load: Into prediction system
-  
-  4. Test: New model on historical data
-     ├─ Calculate: MAPE, R²
-     └─ Verify: Performance acceptable
-  
-  5. Email to manager (optional)
-     └─ "Yesterday's prediction accuracy: 94%"
-});
+Morning reminder:
+  1. System sends "Generate tomorrow's prediction" notification.
+  2. Manager opens dashboard.
+  3. Manager presses Generate Tomorrow's Prediction.
+  4. System predicts demand and shows inventory-aware recommendation.
+
+Evening reminder:
+  1. System sends "Run today's POS simulation" notification.
+  2. Manager opens dashboard.
+  3. Manager presses Run Today's POS Simulation.
+  4. System simulates sales, records DailyResult/DailySalesRecord, and updates dashboards.
+  5. Manager reviews the recommended leftover action and confirms donation or waste.
+
+Model retraining:
+  - System Administrator manually requests candidate training through Node.js.
+  - Evaluation and explicit activation are separate actions.
+  - Automatic nightly retraining is treated as a production enhancement.
 ```
 
 **What This Enables:**
 ```
-DAY 1-5: Model accuracy: 82% (learning phase)
-DAY 6-10: Model accuracy: 87% (getting better)
-DAY 11-30: Model accuracy: 91% (very good)
-DAY 30+: Model accuracy: 95%+ (specialized to this bakery)
-
-Why? Because Node.js retrained the model every single night!
+✅ Easier deployment
+✅ Easier UAT
+✅ Easier supervisor demonstration
+✅ Clear manager audit trail
+✅ Same core intelligent features without scheduler complexity
 ```
 
 **Why This Matters for Your Viva:**
-> "I implemented automated model retraining using Node.js scheduling. Every night at 11 PM, the system collects the day's simulation data, sends it to the Python ML server for retraining, and updates the model. This ensures continuous improvement without manual intervention—demonstrating understanding of DevOps and automated ML pipelines."
+> "In the prototype implementation, prediction generation and POS simulation are manually initiated by the bakery manager to simplify deployment, testing, and demonstration. The system sends reminder notifications at predefined times so the manager knows when to run each process. In a production environment, these operations could be automated using scheduled background jobs."
 
 ---
 
