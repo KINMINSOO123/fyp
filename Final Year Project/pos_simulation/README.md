@@ -1,946 +1,238 @@
-# Module 4: POS Simulation — Detailed Plan
+# Module 4: POS Simulation — Detailed Proposed Design
 
-**Build Order:** 5th (depends on Module 0, Module 1, Module 2, Module 3)
-**Status:** Detailed plan — ready for implementation
-**Architecture:** View → `PosSimulationController` → `PosSimulationService` → Services/Repos (see `../ARCHITECTURE.md`)
+Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`: FR-POS-01–08, NFR-REL-01/04, Sections 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. This is a design and test plan for the Flutter starter repository. No simulation backend, transaction RPC, migration or verification result is claimed to exist.
 
-> See `MODULE.md` in this folder for the high-level plan (sub-modules, simulation flow, stock-out example, file structure).
-> This README documents the concrete artifacts to build: repo methods, service function signatures, controller code, verification.
+See [module scope](MODULE.md), [inventory plan](../inventory_integration/README.md), [schema](../../database_canonical_design.md), [architecture](../ARCHITECTURE.md), [logical design](../../logical_view_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
 
-## Revision baseline (authoritative)
+## 1. Operational scope and prerequisites
 
-- Use the stored `DailyPrediction.predictedUnitsSold` as the simulation baseline. Weather, holiday, season and other context already included in that prediction must not be multiplied again; context retrieval is for traceability/display.
-- Validate confirmed production and valid inventory first. Deduct FIFO exactly once before simulated sales, identify the movements, and roll back or reverse them if any later processing fails.
-- `DailyResult` is the detailed completed simulation outcome and uses `unitsSold`, `lostSales`, `estimatedDemand`, `leftover` and `remainingUnallocatedLeftover`.
-- After successful completion, create one validated `DailySalesRecord` per category with `dataOrigin = SIMULATION_GENERATED`. Development training may use it; evaluation must be labelled simulation-based.
-- Use class names `PosSimulationController`, `PosSimulationService` and `TransactionRecordingService`. Express routers remain thin modules.
+Technical Module 4 delivers POS and Sales Simulation and supplies reporting, prediction history, notification events and leftover allocation inputs. It supports one bakery's Android prototype. Customer ordering, payment processing, delivery, marketplaces, real POS hardware and automatic scheduled simulation are excluded.
 
-All older double-context multiplier, direct `daily_results` training, deduction-after-sales, retry-without-reversal, `salesController`, `simulationService`, `predicted_demand`, `sold` or `demand` sketches below are superseded and must be adapted before implementation.
+Only an ACTIVE BAKERY_MANAGER may start simulation. A SYSTEM_ADMINISTRATOR may view permitted reports/results but cannot run it. Node validates the JWT and stored profile before role checks. Never infer role from email or trust client actor/role/feasibility values.
 
----
+Default date is today in the configured bakery timezone. Every included category requires:
 
-## 1. Dependencies (from Modules 0, 1, 3)
+- A valid stored prediction for exactly the selected date and category.
+- An explicit Bakery Manager production decision referencing that prediction.
+- A nonnegative confirmed whole quantity, valid recipe and required category/simulation configuration.
+- No already committed production/result for that decision.
+- Sufficient valid ingredients after considering all outstanding commitments for the date.
 
-| Artifact | Used For |
+A confirmed quantity of zero is valid. No recommendation fallback or client production override can replace confirmation. Active categories are configuration-driven; four seed categories/five ingredients are not fixed limits. The reference workload includes 20 active categories.
+
+## 2. Proposed API, contracts and Views
+
+| Method/path | Permission | Contract |
+|---|---|---|
+| `POST /api/simulations` | Manager | `{ date?: ISODate }`; execute the complete selected-date operation |
+| `GET /api/simulations/:date` | Both ACTIVE roles, permitted data | Completed daily results, operational-chain references, simulated labels and financial totals |
+| `GET /api/simulations/:date/transactions` | Both ACTIVE roles, permitted data | Category/time-slot filters, pagination with at most 50 displayed records/page |
+
+The initiation request has no produced quantity, prediction value, user/role, force-replacement or feasibility field. Node derives the trusted categories, decision IDs, actor and operation identifier. Proposed Zod sketch:
+
+```typescript
+const SimulateRequest = z.object({
+  date: z.string().date().optional(),
+}).strict();
+```
+
+Unknown fields are rejected. An invalid or missing prerequisite returns a structured validation/conflict response with the missing prediction/decision or ingredient shortage; it creates no completed operation.
+
+| DTO field | Meaning / persistence mapping |
 |---|---|
-| Module 0 schema: `sales_transactions`, `production_decisions`, `daily_production`, detailed `daily_results`, validated `daily_sales_records`, `daily_predictions`, `bread_categories` | CRUD + business logic through TypeScript Repos |
-| Module 0 `shared/types.ts` | Zod schemas for request/response validation (Model layer) |
-| Module 1 `ContextService.getContext(date)` | Fetch weather + calendar for traceability/display only |
-| Module 1 `DailyPredictionRepo.findByDate(date)` | Read the stored prediction baseline |
-| Module 1 `breadCategoryRepo.findAll()` | Read `selling_price` per category — used to snapshot `sales_transactions.unit_price` at sale time. **Reporting only** — not used to alter production. |
-| Module 1 `repositories/baseRepo.ts` | Base class new repos extend |
-| Module 3 `InventoryService.deductFifo` | Deduct ingredients from valid FIFO batches exactly once before simulated sales |
-| Module 3 `InventoryService.reverseDeduction` | Reverse linked deduction if later processing fails or an authorised replacement occurs |
-| Module 3 `ingredientCostCalculator.costPerUnit(categoryId)` | Compute ingredient cost per produced unit (reporting-only) → drives `daily_results.ingredient_cost` (on PRODUCED). Not used for any optimisation. |
-| Module 3 `productionDecisionService.getProductionDecisions` | Use manager-selected quantities when available |
-| Module 0 configurable settings | Time-slot/stochastic controls; context multipliers are not reapplied |
-| Module 1 `notificationService.emit` | Emit `stock_out` alert when `lost_sales > 0` during simulation (live bell badge + FCM background push) |
+| `date`, `breadCategoryId`, `predictionId`, `productionDecisionId`, `dailyProductionId`, `dailyResultId` | Unique linked category/date operational chain |
+| `predictedUnitsSold` | Stored prediction baseline, never generated inside simulation |
+| `predictionMode`, `confidence`, `modelVersionId` | Preserve MODEL numerical confidence/version or COLD_START null/null |
+| `produced`, `unitsSold`, `lostSales`, `estimatedDemand`, `leftover` | Nonnegative whole-unit outcomes; maps to canonical SQL fields |
+| `salesPredictionError` | Signed `sales_prediction_error` |
+| `remainingUnallocatedLeftover` | Initialized to leftover on successful completion |
+| `leftoverRatePct`, `grossProfitMarginPct` | Nullable computed percentages; null means Not Applicable |
+| `revenue`, `ingredientCost`, `grossProfit` | Snapshot-derived financial reporting; gross profit can be negative |
+| `dataOrigin` | Exactly `SIMULATION_GENERATED` for official simulator output |
 
----
+`PosSimulationView` shows selected date, predictions, confirmed quantities, shortages and completed status. The manager explicitly chooses Run Simulation. Show missing prerequisite actions, understandable errors and retry guidance. A request-in-flight button guard improves usability but is not idempotency protection. Completed result links lead to manual leftover allocation and filtered reports; no automatic donation occurs.
 
-## 2. Artifacts to Build
+## 3. Class boundaries and persistence
 
-> Layered per `../ARCHITECTURE.md`. Repos = Supabase only. Services = business logic + call repos. Controllers = thin HTTP handlers.
-
-| # | Path | Layer | Purpose |
-|---|---|---|---|
-| 1 | `backend/src/repositories/salesTransactionRepo.ts` | Repo | sales_transactions CRUD + findByDate + findBySlot + deleteByDate |
-| 2 | `backend/src/repositories/dailyProductionRepo.ts` | Repo | daily_production CRUD + findByDate + deleteByDate |
-| 3 | `backend/src/repositories/dailyResultRepo.ts` | Repo | EXTEND Module 3's repo: add insert + findByDate + deleteByDate |
-| 4 | `backend/src/services/salesDistributionService.ts` | Service | Apply time-slot weights (pure calc, no DB) |
-| 5 | `backend/src/services/posSimulationService.ts` | Service | Stored-prediction baseline, stochastic/time-slot simulation and stock-out logic |
-| 6 | `backend/src/services/transactionRecordingService.ts` | Service | FIFO-before-sales unit of work, operational writes, history creation and failure reversal |
-| 7 | `backend/src/services/manualCorrectionService.ts` | Service | Correct daily_results values + notes, recalculate derived metrics, log correction |
-| 8 | `backend/src/controllers/posSimulationController.ts` | Controller | Class-based POS simulation endpoints |
-| 9 | `backend/src/routes/posSimulationRoutes.ts` | Module | Thin Express route registration |
-| 10 | Update `backend/shared/types.ts` | Model | Add canonical `DailyProduction`, `SalesTransaction`, `DailyResult`, `DailySalesRecord`, `DataOrigin`, request and summary schemas |
-| 10a | `backend/src/repositories/dailySalesRecordRepo.ts` | Repo | Insert validated `SIMULATION_GENERATED` history after success |
-| 11 | (uses) `backend/src/services/notificationService.ts` | Service | Built in **Module 1** — this module imports and calls it for `stock_out` alerts. Not re-created here. |
-
----
-
-## 3. Shared Types (add to `backend/shared/types.ts`)
-
-```typescript
-// Sales transaction (raw — every simulated sale)
-export const SalesTransactionSchema = z.object({
-  id: z.string().uuid().optional(),
-  sale_date: z.string(),
-  sale_time: z.string(),
-  time_slot: z.enum(['morning', 'afternoon', 'evening']),
-  bread_category_id: z.string().uuid(),
-  quantity: z.number().int().positive(),
-  unit_price: z.number().nonnegative(),   // snapshot of bread_categories.selling_price at sale moment (RM). Reporting only.
-  subtotal:   z.number().nonnegative(),    // quantity * unit_price (RM)
-  created_at: z.string().optional(),
-});
-export type SalesTransaction = z.infer<typeof SalesTransactionSchema>;
-
-// Daily production record
-export const DailyProductionSchema = z.object({
-  id: z.string().uuid().optional(),
-  production_date: z.string(),
-  bread_category_id: z.string().uuid(),
-  production_decision_id: z.string().uuid().nullable().optional(),
-  recommended_qty: z.number().int(),
-  actual_produced: z.number().int(),
-  adjustment_reason: z.string().nullable().optional(),
-});
-export type DailyProduction = z.infer<typeof DailyProductionSchema>;
-
-// Daily results (EXTEND existing schema with demand + lost_sales + notes)
-export const DailyResultSchema = z.object({
-  id: z.string().uuid().optional(),
-  result_date: z.string(),
-  bread_category_id: z.string().uuid(),
-  prediction_id: z.string().uuid().nullable().optional(),
-  predicted: z.number().int(),
-  produced: z.number().int(),
-  sold: z.number().int(),
-  leftover: z.number().int(),
-  demand: z.number().int(),              // NEW — simulated demand before capping
-  lost_sales: z.number().int().default(0), // NEW — stock-out tracking
-  waste_rate_pct: z.number().nullable().optional(),
-  error_units: z.number().int().nullable().optional(),
-  error_pct: z.number().nullable().optional(),
-  notes: z.string().nullable().optional(),
-  revenue: z.number().nonnegative().default(0),          // NEW — SUM(sales_transactions.subtotal) for this category-day. Cache for dashboards. Reporting only.
-  ingredient_cost: z.number().nonnegative().default(0),  // NEW — produced * costPerUnit(category). Cost on PRODUCED, not sold. Reporting only.
-  gross_profit: z.number().default(0),                   // NEW — revenue - ingredient_cost. Proves "less waste = better profit".
-});
-export type DailyResult = z.infer<typeof DailyResultSchema>;
-
-// Simulation request
-export const SimulateRequestSchema = z.object({
-  date: z.string(),
-  producedOverride: z.record(z.string().uuid(), z.number().int().positive()).optional(),
-  dryRun: z.boolean().optional().default(false),
-  forceRefresh: z.boolean().optional().default(false),
-});
-export type SimulateRequest = z.infer<typeof SimulateRequestSchema>;
-
-// Simulation result summary
-export const SimulationSummarySchema = z.object({
-  date: z.string(),
-  categories: z.array(z.object({
-    bread_category_id: z.string().uuid(),
-    category_name: z.string(),
-    predicted: z.number().int(),
-    produced: z.number().int(),
-    demand: z.number().int(),
-    sold: z.number().int(),
-    leftover: z.number().int(),
-    lost_sales: z.number().int(),
-    waste_rate_pct: z.number(),
-    // Reporting-only financial snapshot for this category-day (cached on daily_results)
-    revenue: z.number().nonnegative(),
-    ingredient_cost: z.number().nonnegative(),  // cost on PRODUCED, not sold
-    gross_profit: z.number(),
-  })),
-  total_sold: z.number().int(),
-  total_leftover: z.number().int(),
-  total_lost_sales: z.number().int(),
-  total_revenue: z.number().nonnegative(),
-  total_ingredient_cost: z.number().nonnegative(),
-  total_gross_profit: z.number(),
-  weather_condition: z.string(),
-  holiday_multiplier: z.number(),
-  dry_run: z.boolean().optional().default(false),
-});
-export type SimulationSummary = z.infer<typeof SimulationSummarySchema>;
+```mermaid
+flowchart LR
+  V[PosSimulationView] --> C[PosSimulationController]
+  C --> S[PosSimulationService]
+  S --> CT[ContextService]
+  S --> T[TransactionRecordingService]
+  T --> F[FifoBatchService]
+  T --> SD[SalesDistributionService]
+  T --> IC[IngredientCostService]
+  T --> R[SimulationCommitRepo]
+  R --> DB[(One PostgreSQL transaction)]
+  S --> N[NotificationService after commit]
 ```
 
----
+The diagram shows class dependencies; the Express route registration module is separate from `PosSimulationController`. Controllers delegate to Services. Services use Repos and existing adapters; no raw database access belongs in Flutter or FastAPI.
 
-## 4. Repositories (Repo Layer — Supabase only)
+`SimulationCommitRepo` manages a single PostgreSQL connection/transaction and passes its transaction context to `DailyPredictionRepo`, `ProductionDecisionRepo`, `DailyProductionRepo`, `SalesTransactionRepo`, `DailyResultRepo`, `DailySalesRecordRepo`, `InventoryRepo`, `InventoryBatchRepo` and `InventoryLogRepo`. Calls must not silently use a second connection or independent Supabase REST commit.
 
-> Repos do ONLY Supabase queries. No business logic. See `../ARCHITECTURE.md` §4.2. All extend `baseRepo.ts` from Module 1.
+The equivalent named RPC contract is `complete_pos_simulation`; it is proposed, not an implemented function. Either transaction mechanism must preserve the same row locks, server validation, deduction-before-sales sequence and all-or-nothing writes. No client can invoke the privileged RPC directly. Revoke general execution and permit only the protected Node server role; revalidate its supplied authenticated actor against the active manager profile.
 
-### 4.1 `src/repositories/salesTransactionRepo.ts`
+## 4. Single atomic operation and lock order
 
-```typescript
-import { BaseRepo } from './baseRepo';
-import { supabase } from '../config/supabase';
-import { SalesTransaction } from '../../shared/types';
+External weather/holiday/context retrieval happens before acquiring inventory locks. Context for the selected date supports traceability/display and marked fallbacks only. It is never multiplied into the already contextualised baseline again.
 
-export class SalesTransactionRepo extends BaseRepo<SalesTransaction> {
-  constructor() { super('sales_transactions'); }
+One transaction covers the entire selected-date simulation, not a separately committed transaction per category:
 
-  async findByDate(saleDate: string): Promise<SalesTransaction[]> {
-    const { data, error } = await supabase
-      .from('sales_transactions')
-      .select('*')
-      .eq('sale_date', saleDate)
-      .order('sale_time');
-    if (error) throw error;
-    return data;
-  }
+1. Serialize this production date using the same transaction-level plan lock as `ProductionDecisionService`. Revalidate the ACTIVE manager and current stored predictions, confirmations and configuration.
+2. Lock decisions, recipe/configuration rows needed for consistent quantities, inventory snapshots and usable batches in a deterministic order. Shared ingredient locks serialize competing deductions across categories and dates.
+3. Reject missing/mismatched date/category links and any already processed decision. A decision is processed only when a committed `daily_production` references its unique decision ID.
+4. Recalculate combined requirements for all outstanding decisions for the selected date, including any other commitments relevant to the requested plan. Exclude processed decisions. Reject shortages before deduction.
+5. For each selected confirmed decision, deduct valid active batches in ascending `received_date`, then `id`; exclude expired, inactive and future-received batches. Record exact decision-linked movements using one `operation_id` and update batch remainders/status and inventory caches. Category processing is deterministic so movement costs have unambiguous decision owners.
+6. Only after deduction, process simulated sales from stored predictions and configured stochastic/time-slot variations. Selling-price snapshots are captured from the validated category configuration.
+7. Persist one `daily_production` per decision, one `daily_results` per production, all `sales_transactions` and exactly one validated `daily_sales_records` row per category/result with `SIMULATION_GENERATED` origin and `source_daily_result_id`.
+8. Verify transaction sums, derived totals, nonnegative quantities, linked records and inventory balances. Record the successful operational audit in the transaction.
+9. Commit once. Return completed results. Only then dispatch recipient events through `NotificationService`.
 
-  async findByDateAndSlot(saleDate: string, slot: string): Promise<SalesTransaction[]> {
-    const { data, error } = await supabase
-      .from('sales_transactions')
-      .select('*')
-      .eq('sale_date', saleDate)
-      .eq('time_slot', slot)
-      .order('sale_time');
-    if (error) throw error;
-    return data;
-  }
+Any validation, calculation, deduction, insert or audit failure before commit rolls back **all** attempted batch changes, inventory snapshots, inventory movements, production, sales transactions, results and simulation-origin history. The decision remains unprocessed and stock has no retained deduction. A retry revalidates ingredients and performs FIFO again because the failed attempt committed nothing.
 
-  async findByDateAndCategory(saleDate: string, categoryId: string): Promise<SalesTransaction[]> {
-    const { data, error } = await supabase
-      .from('sales_transactions')
-      .select('*')
-      .eq('sale_date', saleDate)
-      .eq('bread_category_id', categoryId)
-      .order('sale_time');
-    if (error) throw error;
-    return data;
-  }
-
-  async deleteByDate(saleDate: string): Promise<void> {
-    const { error } = await supabase
-      .from('sales_transactions')
-      .delete()
-      .eq('sale_date', saleDate);
-    if (error) throw error;
-  }
-
-  async insertMany(transactions: SalesTransaction[]): Promise<void> {
-    if (transactions.length === 0) return;
-    const { error } = await supabase
-      .from('sales_transactions')
-      .insert(transactions);
-    if (error) throw error;
-  }
-}
-export const salesTransactionRepo = new SalesTransactionRepo();
-```
-
-### 4.2 `src/repositories/dailyProductionRepo.ts`
-
-```typescript
-import { BaseRepo } from './baseRepo';
-import { supabase } from '../config/supabase';
-import { DailyProduction } from '../../shared/types';
-
-export class DailyProductionRepo extends BaseRepo<DailyProduction> {
-  constructor() { super('daily_production'); }
-
-  async findByDate(productionDate: string): Promise<DailyProduction[]> {
-    const { data, error } = await supabase
-      .from('daily_production')
-      .select('*')
-      .eq('production_date', productionDate);
-    if (error) throw error;
-    return data;
-  }
-
-  async deleteByDate(productionDate: string): Promise<void> {
-    const { error } = await supabase
-      .from('daily_production')
-      .delete()
-      .eq('production_date', productionDate);
-    if (error) throw error;
-  }
-
-  async upsert(data: DailyProduction): Promise<void> {
-    const { error } = await supabase
-      .from('daily_production')
-      .upsert(data, { onConflict: 'production_date,bread_category_id' });
-    if (error) throw error;
-  }
-}
-export const dailyProductionRepo = new DailyProductionRepo();
-```
-
-### 4.3 `src/repositories/dailyResultRepo.ts` (EXTEND Module 3's repo)
-
-> Module 3 already defined `findByDateRange` (read, for weekly summary). Module 4 adds write + delete methods for simulation.
-
-```typescript
-import { BaseRepo } from './baseRepo';
-import { supabase } from '../config/supabase';
-import { DailyResult } from '../../shared/types';
-
-export class DailyResultRepo extends BaseRepo<DailyResult> {
-  constructor() { super('daily_results'); }
-
-  // === From Module 3 (weekly summary) ===
-  async findByDateRange(startDate: string, endDate: string): Promise<any[]> {
-    const { data, error } = await supabase
-      .from('daily_results')
-      .select('bread_category_id, produced, sold, leftover, waste_rate_pct, bread_categories(name)')
-      .gte('result_date', startDate)
-      .lte('result_date', endDate);
-    if (error) throw error;
-    return data;
-  }
-
-  // === NEW in Module 4 (simulation) ===
-  async findByDate(resultDate: string): Promise<DailyResult[]> {
-    const { data, error } = await supabase
-      .from('daily_results')
-      .select('*')
-      .eq('result_date', resultDate);
-    if (error) throw error;
-    return data;
-  }
-
-  async deleteByDate(resultDate: string): Promise<void> {
-    const { error } = await supabase
-      .from('daily_results')
-      .delete()
-      .eq('result_date', resultDate);
-    if (error) throw error;
-  }
-
-  async upsert(data: DailyResult): Promise<void> {
-    const { error } = await supabase
-      .from('daily_results')
-      .upsert(data, { onConflict: 'result_date,bread_category_id' });
-    if (error) throw error;
-  }
-}
-export const dailyResultRepo = new DailyResultRepo();
-```
-
----
-
-## 5. Services (Service Layer — business logic, calls repos)
-
-> Services contain business logic. They call repos for DB access. No direct Supabase calls. See `../ARCHITECTURE.md` §4.3.
-
-### 5.1 `src/services/salesDistributionService.ts` (pure calc — no DB)
-
-```typescript
-interface SlotAllocation {
-  morning: number;
-  afternoon: number;
-  evening: number;
-}
-
-interface SlotWeights {
-  morning: number;
-  afternoon: number;
-  evening: number;
-}
-
-function gaussianNoise(sigmaPct: number): number {
-  // Box-Muller transform for gaussian noise
-  // Returns multiplier centered at 1.0 with given standard deviation
-  const u1 = Math.random();
-  const u2 = Math.random();
-  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  return 1 + (z * sigmaPct);
-}
-
-export function distributeSold(sold: number, weights: SlotWeights): SlotAllocation {
-  """Apply time-slot weights + gaussian noise (±10%) per slot.
-  Ensures slot totals add up to sold (remainder goes to evening)."""
-  const morning = Math.max(0, Math.round(sold * weights.morning * gaussianNoise(0.10)));
-  const afternoon = Math.max(0, Math.round(sold * weights.afternoon * gaussianNoise(0.10)));
-  const evening = Math.max(0, sold - morning - afternoon);  // remainder ensures total = sold
-  return { morning, afternoon, evening };
-}
-
-export function randomTimeInSlot(slot: string): string {
-  """Generate a random time within the slot's time range."""
-  const ranges = {
-    morning: { start: 6 * 60, end: 11 * 60 },     // 06:00 - 11:00
-    afternoon: { start: 11 * 60, end: 15 * 60 },  // 11:00 - 15:00
-    evening: { start: 15 * 60, end: 18 * 60 },    // 15:00 - 18:00
-  };
-  const range = ranges[slot];
-  const minutes = range.start + Math.floor(Math.random() * (range.end - range.start));
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-}
-
-export function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-```
-
-### 5.2 Historical `transactionRecordingService.ts` sketch (ordering superseded)
-
-> Do not implement the write-then-deduct ordering shown below. The canonical sequence is validate → FIFO deduction exactly once → simulated sales/result writes → validated `DailySalesRecord(SIMULATION_GENERATED)` → commit. Any later failure rolls back or calls `InventoryService.reverseDeduction(reference)`.
-
-```typescript
-import { salesTransactionRepo } from '../repositories/salesTransactionRepo';
-import { dailyProductionRepo } from '../repositories/dailyProductionRepo';
-import { dailyResultRepo } from '../repositories/dailyResultRepo';
-import { inventoryService } from './inventoryService';
-import { ingredientCostCalculator } from './ingredientCostCalculator';  // Module 3 — reporting-only
-import { logger } from '../utils/logger';
-import { SalesTransaction, DailyProduction, DailyResult } from '../../shared/types';
-
-interface DayData {
-  date: string;
-  category: {
-    bread_category_id: string;
-    category_name: string;
-    predicted_demand: number;
-    id?: string;
-  };
-  produced: number;
-  sold: number;
-  demand: number;
-  leftover: number;
-  lostSales: number;
-  wasteRate: number;
-  transactions: SalesTransaction[];   // each row already carries unit_price + subtotal (set in simulationService.generateTransactions)
-  predictionId?: string;
-  productionDecisionId?: string;
-}
-
-export const transactionRecordingService = {
-  async recordDay(data: DayData): Promise<void> {
-    // 1. Insert sales_transactions (bulk)
-    await salesTransactionRepo.insertMany(data.transactions);
-
-    // 2. Insert daily_production, linked to production_decision_id when available
-    await dailyProductionRepo.upsert({
-      production_date: data.date,
-      bread_category_id: data.category.bread_category_id,
-      production_decision_id: data.productionDecisionId ?? null,
-      recommended_qty: data.category.predicted_demand,
-      actual_produced: data.produced,
-    } as DailyProduction);
-
-    // 3. Insert daily_results (with demand + lost_sales + financial cache)
-    const errorUnits = Math.abs(data.category.predicted_demand - data.sold);
-    const errorPct = data.sold > 0
-      ? (errorUnits / data.sold) * 100
-      : 0;
-
-    // Financial snapshot (reporting-only). Cost is on PRODUCED units (sold + leftover),
-    // so wasted/donated bread's ingredient cost still counts — making waste visibly eat profit.
-    const revenue         = data.transactions.reduce((s, t) => s + (t.subtotal ?? 0), 0);
-    const costPerUnit     = await ingredientCostCalculator.costPerUnit(data.category.bread_category_id);
-    const ingredient_cost = data.produced * costPerUnit;   // produced, NOT sold — by design
-    const gross_profit    = revenue - ingredient_cost;
-
-    await dailyResultRepo.upsert({
-      result_date: data.date,
-      bread_category_id: data.category.bread_category_id,
-      prediction_id: data.predictionId ?? null,
-      predicted: data.category.predicted_demand,
-      produced: data.produced,
-      sold: data.sold,
-      leftover: data.leftover,
-      demand: data.demand,
-      lost_sales: data.lostSales,
-      waste_rate_pct: data.wasteRate,
-      error_units: errorUnits,
-      error_pct: errorPct,
-      revenue,
-      ingredient_cost,
-      gross_profit,
-    } as DailyResult);
-
-    // 4. Deduct ingredients using FIFO batches (call Module 3 service)
-    await inventoryService.deductForProduction(
-      data.category.bread_category_id,
-      data.produced,
-      data.date
-    );
-
-    logger.info('Day recorded', {
-      date: data.date,
-      category: data.category.category_name,
-      produced: data.produced,
-      sold: data.sold,
-      demand: data.demand,
-      lostSales: data.lostSales,
-    });
-  },
-
-  async clearDateData(date: string): Promise<void> {
-    """For re-simulation: reverse inventory + delete all data for the date."""
-    // 1. Read existing daily_production for date
-    const existing = await dailyProductionRepo.findByDate(date);
-
-    // 2. Reverse inventory deductions (add back ingredients)
-    for (const prod of existing) {
-      await inventoryService.reverseProductionDeduction(
-        prod.bread_category_id,
-        prod.actual_produced,
-        date
-      );
-    }
-
-    // 3. Delete all data for this date
-    await salesTransactionRepo.deleteByDate(date);
-    await dailyProductionRepo.deleteByDate(date);
-    await dailyResultRepo.deleteByDate(date);
-
-    logger.info('Date data cleared for re-simulation', { date, categoriesReversed: existing.length });
-  },
-};
-```
-
-### 5.3 Historical `simulationService.ts` sketch (superseded by `PosSimulationService`)
-
-> Do not implement the weather/holiday multiplication shown below. Use the stored `DailyPrediction` baseline plus configured stochastic/time-slot variation only.
-
-```typescript
-import { predictionRepo } from '../repositories/predictionRepo';
-import { fetchContext } from './contextService';
-import { salesDistributionService } from './salesDistributionService';
-import { transactionRecordingService } from './transactionRecordingService';
-import { notificationService } from './notificationService';
-import { getProductionDecisions } from './productionDecisionService';
-import { dailyResultRepo } from '../repositories/dailyResultRepo';
-import { loadConstants } from '../features/constants';
-import { logger } from '../utils/logger';
-import { SalesTransaction, SimulationSummary } from '../../shared/types';
-
-interface SimulateOptions {
-  producedOverride?: Record<string, number>;
-  dryRun?: boolean;
-  forceRefresh?: boolean;
-}
-
-function gaussianNoise(sigmaPct: number): number {
-  const u1 = Math.random();
-  const u2 = Math.random();
-  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  return 1 + (z * sigmaPct);
-}
-
-function generateTransactions(
-  date: string,
-  categoryId: string,
-  slotAlloc: { morning: number; afternoon: number; evening: number },
-  sellingPrice: number    // snapshot of bread_categories.selling_price for this category (reporting-only)
-): SalesTransaction[] {
-  const transactions: SalesTransaction[] = [];
-  for (const [slot, units] of Object.entries(slotAlloc)) {
-    let remaining = units;
-    while (remaining > 0) {
-      const qty = Math.min(salesDistributionService.randomInt(1, 3), remaining);
-      const saleTime = salesDistributionService.randomTimeInSlot(slot);
-      transactions.push({
-        sale_date: date,
-        sale_time: saleTime,
-        time_slot: slot as 'morning' | 'afternoon' | 'evening',
-        bread_category_id: categoryId,
-        quantity: qty,
-        unit_price: sellingPrice,                  // snapshot at sale moment
-        subtotal: qty * sellingPrice,               // quantity * unit_price
-      });
-      remaining -= qty;
-    }
-  }
-  return transactions;
-}
-
-export const simulationService = {
-  async simulateDay(date: string, options: SimulateOptions = {}): Promise<SimulationSummary> {
-    const constants = loadConstants();
-
-    // STEP 0: Handle re-simulation
-    if (options.forceRefresh && !options.dryRun) {
-      const existing = await dailyResultRepo.findByDate(date);
-      if (existing.length > 0) {
-        logger.info('Re-simulating date (forceRefresh)', { date });
-        await transactionRecordingService.clearDateData(date);
-      }
-    }
-
-    // STEP 1: Fetch prediction for date
-    const predictions = await predictionRepo.findByDate(date);
-    if (predictions.length === 0) {
-      throw new Error(`No predictions found for date ${date}. Run prediction first.`);
-    }
-
-    const decisions = await getProductionDecisions(date);
-    const decisionByCategory = new Map(
-      decisions.map(d => [d.bread_category_id, d])
-    );
-
-    // STEP 2: Fetch context (weather + calendar) + bread categories (for price snapshot)
-    const context = await fetchContext(date);
-    const weatherCondition = context.weather?.condition ?? 'cloudy';
-    const weatherMult = constants.weather_multipliers[weatherCondition] ?? 1.0;
-    const holidayMult = context.calendar[0]?.demand_multiplier ?? 1.0;
-
-    // Fetch bread categories once — used purely to snapshot selling_price into sales_transactions.unit_price.
-    // Reporting-only: prices do NOT affect demand, production, or stock-out logic below.
-    const categoryRows = await breadCategoryRepo.findAll();
-    const sellingPriceByCat: Record<string, number> = {};
-    for (const c of categoryRows) sellingPriceByCat[c.id] = c.selling_price ?? 0;
-
-    logger.info('Simulation context', {
-      date, weatherCondition, weatherMult, holidayMult,
-      predictionCount: predictions.length,
-    });
-
-    // STEP 3: Process each category
-    const slotWeights = {
-      morning: constants.time_slots.find(s => s.slot === 'morning')!.weight_pct / 100,
-      afternoon: constants.time_slots.find(s => s.slot === 'afternoon')!.weight_pct / 100,
-      evening: constants.time_slots.find(s => s.slot === 'evening')!.weight_pct / 100,
-    };
-
-    const categories = [];
-    let totalSold = 0;
-    let totalLeftover = 0;
-    let totalLostSales = 0;
-    let totalRevenue = 0;          // reporting-only
-    let totalIngredientCost = 0;   // reporting-only
-    let totalGrossProfit = 0;      // reporting-only
-
-    for (const pred of predictions) {
-      // 3a. Determine production qty.
-      // Normal path: use the manager-confirmed production decision.
-      // producedOverride is for testing/manual simulation scenarios only.
-      const decision = decisionByCategory.get(pred.bread_category_id);
-      const produced = options.producedOverride?.[pred.bread_category_id]
-        ?? decision?.final_selected_qty
-        ?? pred.predicted_demand;
-
-      // 3b. Calculate simulated demand
-      const base = pred.predicted_demand;
-      const demand = Math.max(0, Math.round(base * weatherMult * holidayMult * gaussianNoise(0.10)));
-
-      // 3c. Apply stock-out logic
-      const sold = Math.min(demand, produced);
-      const leftover = produced - sold;
-      const lostSales = Math.max(0, demand - produced);
-      const wasteRate = produced > 0 ? (leftover / produced) * 100 : 0;
-
-      // 3c'. Stock-out notification (Module 1 notificationService)
-      // Emits a 'stock_out' alert → Supabase Realtime (foreground) + FCM (background push).
-      // Dedupe guard in notificationService skips if unread alert with same related_id exists.
-      if (lostSales > 0) {
-        await notificationService.emit({
-          type: 'stock_out',
-          severity: 'warning',
-          title: `Stock-Out: ${pred.category_name ?? 'Bread'}`,
-          message: `${lostSales} lost sales on ${date} (demand ${demand} exceeded production ${produced}).`,
-          relatedId: pred.bread_category_id,
-        });
-      }
-
-      // 3d. Distribute sold across 3 time slots
-      const slotAlloc = salesDistributionService.distributeSold(sold, slotWeights);
-
-      // 3e. Generate transactions per slot
-      const transactions = generateTransactions(
-        date,
-        pred.bread_category_id,
-        slotAlloc,
-        sellingPriceByCat[pred.bread_category_id] ?? 0, // snapshot for sales_transactions.unit_price
-      );
-
-      // 3f + 3g + 3h. Record production + results + transactions + deduct inventory.
-      // Historical dry-run reruns return a summary only; they must not rewrite sales,
-      // daily_results, or current FIFO inventory.
-      if (!options.dryRun) {
-        await transactionRecordingService.recordDay({
-          date,
-          category: {
-            bread_category_id: pred.bread_category_id,
-            category_name: pred.category_name ?? pred.bread_categories?.name ?? 'Unknown',
-            predicted_demand: pred.predicted_demand,
-            id: pred.id,
-          },
-          produced,
-          sold,
-          demand,
-          leftover,
-          lostSales,
-          wasteRate,
-          transactions,
-          predictionId: pred.id,
-        });
-      }
-
-      // Financial snapshot (reporting-only) — matches what transactionRecordingService caches on daily_results
-      const catRevenue = transactions.reduce((s, t) => s + (t.subtotal ?? 0), 0);
-      const catCostPerUnit = await ingredientCostCalculator.costPerUnit(pred.bread_category_id);
-      const catIngredientCost = produced * catCostPerUnit;  // PRODUCED, not sold — by design
-      const catGrossProfit = catRevenue - catIngredientCost;
-
-      categories.push({
-        bread_category_id: pred.bread_category_id,
-        category_name: pred.category_name ?? 'Unknown',
-        predicted: pred.predicted_demand,
-        produced,
-        demand,
-        sold,
-        leftover,
-        lost_sales: lostSales,
-        waste_rate_pct: Math.round(wasteRate * 100) / 100,
-        revenue: catRevenue,
-        ingredient_cost: catIngredientCost,
-        gross_profit: catGrossProfit,
-      });
-
-      totalSold += sold;
-      totalLeftover += leftover;
-      totalLostSales += lostSales;
-      totalRevenue += catRevenue;
-      totalIngredientCost += catIngredientCost;
-      totalGrossProfit += catGrossProfit;
-    }
-
-    logger.info('Simulation complete', {
-      date, categories: categories.length, totalSold, totalLeftover, totalLostSales,
-      totalRevenue, totalIngredientCost, totalGrossProfit,
-    });
-
-    return {
-      date,
-      categories,
-      total_sold: totalSold,
-      total_leftover: totalLeftover,
-      total_lost_sales: totalLostSales,
-      total_revenue: totalRevenue,                  // reporting-only
-      total_ingredient_cost: totalIngredientCost,   // reporting-only
-      total_gross_profit: totalGrossProfit,         // reporting-only
-      weather_condition: weatherCondition,
-      holiday_multiplier: holidayMult,
-      dry_run: options.dryRun ?? false,
-    };
-  },
-};
-```
-
----
-
-## 6. Historical Router-as-Controller Sketch (superseded)
-
-The final design uses a `PosSimulationController` class and a separate thin Express router module. The following `salesController = Router()` example is retained only as historical planning context.
-
-### `src/controllers/salesController.ts` (fills Module 1 stub)
-
-```typescript
-import { Router } from 'express';
-import { validateRequest } from '../middleware/validateRequest';
-import { z } from 'zod';
-import { simulationService } from '../services/simulationService';
-import { manualCorrectionService } from '../services/manualCorrectionService';
-import { salesTransactionRepo } from '../repositories/salesTransactionRepo';
-import { dailyResultRepo } from '../repositories/dailyResultRepo';
-
-export const salesController = Router();
-
-const SimulateSchema = z.object({
-  body: z.object({
-    date: z.string(),
-    producedOverride: z.record(z.string().uuid(), z.number().int().positive()).optional(),
-    dryRun: z.boolean().optional().default(false),
-    forceRefresh: z.boolean().optional().default(false),
-  }),
-});
-
-salesController.post('/sales/simulate', validateRequest(SimulateSchema), async (req, res, next) => {
-  try {
-    const { date, producedOverride, dryRun, forceRefresh } = req.body;
-    const result = await simulationService.simulateDay(date, { producedOverride, dryRun, forceRefresh });
-    res.json(result);
-  } catch (err) { next(err); }
-});
-
-salesController.get('/sales/:date', async (req, res, next) => {
-  try {
-    const transactions = await salesTransactionRepo.findByDate(req.params.date);
-    res.json(transactions);
-  } catch (err) { next(err); }
-});
-
-salesController.get('/sales/:date/summary', async (req, res, next) => {
-  try {
-    const results = await dailyResultRepo.findByDate(req.params.date);
-    res.json(results);
-  } catch (err) { next(err); }
-});
-
-const CorrectionSchema = z.object({
-  body: z.object({
-    produced: z.number().int().nonnegative().optional(),
-    sold: z.number().int().nonnegative().optional(),
-    demand: z.number().int().nonnegative().optional(),
-    lost_sales: z.number().int().nonnegative().optional(),
-    notes: z.string().optional(),
-  }),
-});
-
-salesController.patch('/sales/:date/summary/:categoryId', validateRequest(CorrectionSchema), async (req, res, next) => {
-  try {
-    const result = await manualCorrectionService.correctDailyResult(
-      req.params.date,
-      req.params.categoryId,
-      req.body
-    );
-    res.json(result);
-  } catch (err) { next(err); }
-});
-
-salesController.get('/sales/:date/slot/:slot', async (req, res, next) => {
-  try {
-    const transactions = await salesTransactionRepo.findByDateAndSlot(
-      req.params.date, req.params.slot
-    );
-    res.json(transactions);
-  } catch (err) { next(err); }
-});
-
-salesController.get('/sales/:date/category/:categoryId', async (req, res, next) => {
-  try {
-    const transactions = await salesTransactionRepo.findByDateAndCategory(
-      req.params.date, req.params.categoryId
-    );
-    res.json(transactions);
-  } catch (err) { next(err); }
-});
-```
-
-### Update `src/controllers/index.ts`
-
-Replace the stub import with the real controller:
-
-```typescript
-import { salesController } from './salesController';
-// ... other imports ...
-router.use(salesController);
-```
-
----
-
-## 7. Canonical Request Flow — Simulation
+Illustrative orchestration pseudocode, not an implemented backend file:
 
 ```text
-PosSimulationController
-  -> PosSimulationService
-     1. Load confirmed ProductionDecision and stored DailyPrediction.
-     2. Retrieve context only for traceability/display.
-     3. Validate all confirmed quantities and valid inventory.
-     4. TransactionRecordingService deducts FIFO once using an idempotency reference.
-     5. Generate stochastic/time-slot sales from the stored prediction baseline.
-     6. Persist DailyProduction, SalesTransaction and detailed DailyResult.
-     7. Persist validated DailySalesRecord(unitsSold, SIMULATION_GENERATED).
-     8. Commit and return summary.
-     On failure after step 4: roll back/reverse the linked deduction and create no completed history.
+PosSimulationService.run(date, authenticatedActor):
+  authorize manager using JWT and ACTIVE stored profile
+  context = ContextService.getForTraceability(date)
+  completed = TransactionRecordingService.complete(
+    SimulationCommitRepo.withTransaction(tx):
+      lockPlanDate(tx, date)
+      revalidateActorAndStoredPlan(tx, date, authenticatedActor)
+      rejectAnyProcessedDecision(tx)
+      lockSharedInventoryAndRecipes(tx)
+      validateAllOutstandingRequirements(tx, date)
+      movements = FifoBatchService.consumeWithinTransaction(tx)
+      outcomes = processStoredPredictionSalesAfterDeduction(tx, context)
+      costs = IngredientCostService.calculateFromMovements(movements, batchSnapshots)
+      persistProductionTransactionsResultsAndHistory(tx, outcomes, costs)
+      verifyTotalsAndAudit(tx)
+  )  # commit or total rollback
+  NotificationService.emitForCommittedResults(completed)
+  return completed
 ```
 
-### Historical flow sketch (double-context and deduction ordering superseded)
+The code-shaped sketch describes a Service/Repo transaction contract; it does not authorize independent service commits or database credentials in Services.
 
-```
-Flutter manager action: POST /api/sales/simulate
-  Body: { date: "2026-06-26", dryRun: false, forceRefresh: false }
-  ↓
-Node.js auth middleware (verify JWT)
-  ↓
-salesController handler (Controller)
-  ↓
-simulationService.simulateDay('2026-06-26', { dryRun: false, forceRefresh: false }) (Service)
-  ├─ STEP 0: if forceRefresh → transactionRecordingService.clearDateData()
-  │   ├─ dailyProductionRepo.findByDate() (Repo → Supabase)
-  │   ├─ inventoryService.reverseProductionDeduction() (Service → FIFO correction batches)
-  │   ├─ salesTransactionRepo.deleteByDate() (Repo → Supabase)
-  │   ├─ dailyProductionRepo.deleteByDate() (Repo → Supabase)
-  │   └─ dailyResultRepo.deleteByDate() (Repo → Supabase)
-  │
-  ├─ STEP 1: predictionRepo.findByDate('2026-06-26') (Repo → Supabase)
-  │   → [{ bread_category_id, predicted_demand, confidence, ... }]
-  │
-  ├─ STEP 2: contextService.fetchContext('2026-06-26') (Service)
-  │   ├─ weatherService.getWeather() → weatherRepo (Repo → Supabase)
-  │   └─ calendarService.getHolidays() → calendarRepo (Repo → Supabase)
-  │   → { weather: { condition: 'rainy' }, calendar: [{ demand_multiplier: 1.30 }] }
-  │
-  ├─ STEP 3: for each category (4 total):
-  │   ├─ Calculate demand = predicted × 0.85 (rainy) × 1.30 (holiday) × noise
-  │   ├─ Cap sold at produced, compute lost_sales
-  │   ├─ salesDistributionService.distributeSold() (pure calc)
-  │   ├─ generateTransactions() (pure calc)
-  │   ├─ IF lost_sales > 0:
-  │   │   └─ notificationService.emit({type:'stock_out', severity:'warning', relatedId:catId})
-  │   │       → writes notifications row → Supabase Realtime INSERT → Flutter bell badge
-  │   │       → pushService.broadcast → FCM → staff phone lock-screen (if app backgrounded)
-  │   │       (dedupe guard skips if unread 'stock_out' for same catId already exists)
-  │   └─ transactionRecordingService.recordDay() (Service)
-  │       ├─ salesTransactionRepo.insertMany() (Repo → Supabase)
-  │       ├─ dailyProductionRepo.upsert() (Repo → Supabase)
-  │       ├─ dailyResultRepo.upsert() (Repo → Supabase)
-  │       └─ inventoryService.deductForProduction() (Service → FIFO batches + inventory snapshot)
-  │
-  └─ STEP 4: return summary
-  ↓
-Flutter receives: { date, categories: [...with revenue/ingredient_cost/gross_profit per cat], total_sold, total_leftover, total_lost_sales, total_revenue, total_ingredient_cost, total_gross_profit }
+## 5. Duplicate and concurrent requests
+
+Uniqueness and locking enforce idempotency:
+
+- `production_decisions.prediction_id` is unique.
+- `daily_production.production_decision_id` is unique.
+- `daily_results.prediction_id` and `daily_production_id` are unique.
+- The validated simulation-origin `daily_sales_records.source_daily_result_id` is unique.
+- Date/category relationships must match throughout the chain.
+
+An operation UUID groups movements; by itself it does not prevent duplicate production. A second request waits on the relevant plan/decision locks, observes the first completed chain and returns `409 ALREADY_SIMULATED` with a stored-result link. It neither deducts again nor adds partial second-date output. If the first request rolls back, a waiting retry may proceed after fresh validation.
+
+If the server commits but the mobile response is lost, the retry observes the same stored chain. UI then retrieves the completed result. Push/notification failure is reported separately and never causes production to run again.
+
+No `SimulationRun` or `LeftoverRecord` table is introduced. Use the report's existing operational relationships and movement `operation_id`.
+
+## 6. Sales and financial calculations
+
+The stored prediction already reflects weather, holiday, weekday and monsoon context. The simulator adds only configured stochastic/time-slot variation:
+
+```text
+simulated_demand = max(0, round(stored_predicted_units_sold * stochastic_factor))
+units_sold = min(simulated_demand, confirmed_produced)
+lost_sales = max(0, simulated_demand - confirmed_produced)
+estimated_demand = units_sold + lost_sales
+leftover = confirmed_produced - units_sold
+sales_prediction_error = units_sold - stored_predicted_units_sold
+remaining_unallocated_leftover = leftover at simulation completion
 ```
 
-For historical as-of reruns, call the same endpoint with `dryRun: true`. The service still reads the selected date's prediction and context, but skips `clearDateData()` and `recordDay()`, so it does not delete/insert sales rows or mutate current FIFO inventory. Use `forceRefresh: true` only when the manager intentionally wants to replace the official stored simulation for that date.
+Time-slot weights/noise allocate nonnegative whole units and preserve the total exactly; apply them as temporal distribution, not a second whole-day multiplier. Validate configured weights and quantity bounds. Morning/afternoon/evening and a 12-hour opening day can be example configuration; they are not a hard-coded category count or guaranteed transaction count. Each transaction has positive quantity, a valid timestamp/slot and a nonnegative captured unit price. Zero sold units produce no sale rows.
 
----
+Reporting rules:
 
-## 8. Verification Plan
+```text
+leftover_rate_pct = leftover / produced * 100, or null when produced = 0
+revenue = sum(transaction.quantity * transaction.unit_price)
+ingredient_cost = sum(abs(PRODUCTION_DEDUCTION.change_grams) / 1000 * batch.unit_cost)
+gross_profit = revenue - ingredient_cost
+gross_profit_margin_pct = gross_profit / revenue * 100, or null when revenue = 0
+```
 
-| Step | Command | Expected Result |
-|---|---|---|
-| 1 | `POST /api/sales/simulate { date: "2026-06-26" }` | Simulation runs, returns summary with 4 categories |
-| 2 | `GET /api/sales/2026-06-26` | Returns ~200-400 transactions (4 categories × ~50-100 each) |
-| 3 | `GET /api/sales/2026-06-26/summary` | Returns 4 daily_results rows with demand, sold, lost_sales, waste_rate, notes |
-| 4 | `GET /api/sales/2026-06-26/slot/morning` | Returns morning-slot transactions only |
-| 5 | Check Supabase `sales_transactions` | Rows with timestamps, slot, category, qty 1-3, AND `unit_price` snapshot + `subtotal = quantity * unit_price` |
-| 6 | Check Supabase `daily_production` | 4 rows with recommended_qty + actual_produced + production_decision_id when decisions exist |
-| 7 | Check Supabase `daily_results` | 4 rows with demand, sold, lost_sales, error_pct, AND financial cache: `revenue` = SUM(subtotal), `ingredient_cost` = produced * costPerUnit, `gross_profit` = revenue - ingredient_cost |
-| 8 | Check Supabase `inventory_log` | Deduction entries with reason "daily_production" and FIFO `batch_id` values |
-| 9 | Set low production via producedOverride, simulate | See stock-out: lost_sales > 0, leftover = 0 |
-| 10 | `POST /api/sales/simulate { date: "2026-06-26", forceRefresh: true }` | Re-simulates: old data deleted, inventory restored, new data inserted |
-| 11 | Check `inventory_log` after re-simulation | Reversal correction batch entries + new FIFO deduction entries |
-| 11b | `POST /api/sales/simulate { date: "2026-06-10", dryRun: true }` | Historical as-of rerun returns a summary but does not delete/insert sales rows or mutate inventory |
-| 12 | `PATCH /api/sales/2026-06-26/summary/{categoryId}` | Corrects produced/sold/demand/lost_sales/notes and recalculates derived metrics AND recomputes `revenue`/`ingredient_cost`/`gross_profit` |
-| 12b | Financial sanity: simulate a high-waste day (low produced vs predicted) | `gross_profit` visibly lower for that day vs a low-waste day at same revenue — proving the thesis |
-| 13 | `npm run typecheck` | No type errors |
-| 14 | `npm run lint` | No lint errors |
-| 15 | Finance-decoupling audit: `rg "selling_price|unit_cost|gross_profit|revenue" src/services/recommendationEngine.ts src/services/constraintChecker.ts ml_server/src/services ml_server/src/features` | **Zero hits** — confirms finance never enters optimisation/prediction |
+The proposed batch cost convention is MYR/kg, with grams converted once by division by 1,000. Cost comes from actual consumed batches and their immutable unit-cost snapshots, not current ingredient master prices or a generic per-unit recipe estimate. Include the cost of all produced bread, whether sold, donated, discarded or unallocated. Each production decision receives only its own movement costs. Round currency at a consistent final precision.
 
----
+Keep transaction unit-price snapshots so later catalogue price changes cannot rewrite past revenue. Daily totals are verified against transaction detail, and reports use one aggregation level rather than adding both. Financial fields are simulation-labelled reporting estimates; gross profit is not net profit.
 
-## 9. Implementation Order
+Allow signed prediction errors and negative gross profit/margin. UI and CSV/PDF exports show zero-denominator percentages as Not Applicable (null plus appropriate explanatory formatting), not 0%. `leftover_rate_pct` counts unsold units; actual waste is confirmed disposal only. Donation and unallocated leftovers are not waste.
 
-1. Add shared types to `backend/shared/types.ts` (SalesTransaction with `unit_price`+`subtotal`; DailyProduction; DailyResult with demand/lost_sales/notes/`revenue`/`ingredient_cost`/`gross_profit`; SimulateRequest; SimulationSummary)
-2. Create `src/repositories/salesTransactionRepo.ts`
-3. Create `src/repositories/dailyProductionRepo.ts`
-4. Extend `src/repositories/dailyResultRepo.ts` (add write + deleteByDate methods to Module 3's version)
-5. Create `src/services/salesDistributionService.ts` (pure calc — slot weights, random time, random int)
-6. Create `src/services/transactionRecordingService.ts` (writes transactions + production + results, deducts inventory)
-7. Create `src/services/simulationService.ts` (core engine)
-8. Create `src/services/manualCorrectionService.ts` (correct results, recalculate derived metrics, log correction)
-9. Create `src/controllers/salesController.ts` (fills Module 1 stub)
-10. Update `src/controllers/index.ts` to register salesController (replace stub)
-11. In `simulationService.simulateDay()`, after `lostSales = Math.max(0, demand - produced)`, call `notificationService.emit({ type: 'stock_out', severity: 'warning', title: 'Stock-Out: ' + categoryName, message: lost_sales + ' lost sales on ' + date, relatedId: pred.bread_category_id })` when `lostSales > 0` (dedupe by bread_category_id)
-12. Verify: run all verification steps
+### Illustrative outcomes
 
----
+| Fixture | Expected proposed outcome |
+|---|---|
+| Stored prediction 110, confirmed production 100, varied demand 118 | Sold 100, lost sales 18, estimated demand 118, leftover 0, signed sales prediction error -10 |
+| Confirmed production 0, varied demand 12 | Sold 0, lost sales 12, leftover 0, no sale transactions; leftover rate Not Applicable |
+| Produced 10, sold 1 at RM2, actual FIFO ingredient cost RM10 | Revenue RM2, gross profit -RM8, gross-profit margin -400%; valid reporting values |
+| Consume 600 g at RM4/kg and 400 g at RM7/kg | Ingredient cost RM5.20, unchanged by a later master-price change |
 
-## 10. Cross-Module Updates Required
+These are arithmetic examples, not measurements, user study outcomes or proof of improved profitability.
 
-| # | File | Change |
-|---|---|---|
-| 1 | `data_foundation/README.md` | Add `demand` + `lost_sales` + `notes` + `revenue` + `ingredient_cost` + `gross_profit` columns to `daily_results`; add `unit_price` + `subtotal` to `sales_transactions`; seed `bread_categories.selling_price` + `ingredients.unit_cost`; flip `ingredients.unit` to commercial bulk unit. (All done in updated Module 0 plan.) |
-| 2 | `data_foundation/MODULE.md` | Add columns to `bread_categories`, `ingredients`, `sales_transactions`, `daily_results` entity tables. (Done.) |
-| 3 | `inventory_integration/README.md` | Add FIFO-aware deduction/reversal methods to `inventoryService.ts`; **new `ingredientCostCalculator.ts` (reporting-only)** — `costPerUnit(categoryId)` computes ingredient cost per produced unit. Must NOT be imported by `recommendationEngine` or `constraintChecker`. |
-| 4 | `nodejs_middleware/MODULE.md` | Build `notificationService.ts` + `pushService.ts` (FCM) + `notificationRepo.ts` + `fcmTokenRepo.ts` + `notificationController.ts` + `firebaseAdminClient.ts` (so POS simulation can import `notificationService`). Also ensure `breadCategoryRepo.findAll()` returns `selling_price`. |
+## 7. Provenance, leftovers and notification integration
 
----
+On successful commit, persist `DailySalesRecord.unitsSold = DailyResult.units_sold`, mark it validated and set `data_origin = SIMULATION_GENERATED` plus its exact source-result ID. Do not create simulation history on initiation, before completion or after a rolled-back attempt.
 
-## 11. Open Items for Implementation
+Node's subsequent ML data preparation selects one validated category/day record in ACTUAL_TRANSACTION → IMPORTED_HISTORICAL → SIMULATION_GENERATED priority order. Never overwrite higher-priority actual/imported history when saving a simulation. Simulation-based evaluations retain their label; `estimatedDemand` remains analytical rather than a training target.
 
-| # | Item | Notes |
-|---|---|---|
-| 1 | Prediction must exist before simulation | `/api/sales/simulate` throws if no prediction for the date. Run prediction (Module 2) first. |
-| 2 | Weather/holiday must be fetched before simulation | `contextService.fetchContext` handles this automatically (caches in DB, fetches from API if missing) |
-| 3 | PRNG determinism | Simulation uses `Math.random()` (non-deterministic). If reproducible simulations are needed, seed the PRNG like the Module 0 seed script does. |
-| 4 | Transaction count per slot | With qty 1-3 avg 2, ~50-100 transactions per category. 4 categories = ~200-400 total/day. Confirm this volume is acceptable for Supabase. |
-| 5 | Inventory going negative on re-simulation | FIFO reversal is simplified for MVP by adding correction batches. Production-grade reversal would restore exact `inventory_log.batch_id` movements by production run. |
+Module 5 receives `DailyResult` leftovers and initializes manual allocation workflow. Positive donation/waste allocations require explicit manager confirmation and transactional remaining-balance validation. Category is obtained through the result; maintain `leftover = donated + wasted + remaining_unallocated`. Simulation never allocates leftovers automatically.
 
----
+Lost-sales, excessive-surplus and external/system-failure events use recipient-specific notifications. `recipient_user_id`, per-type preferences and recipient-owned active FCM tokens determine delivery. Foreground notification events use the report's authenticated recipient-only Supabase Realtime policy; Node owns writes/mark-read. FCM is for eligible background notifications. Delivery states PENDING, SUBMITTED, DELIVERED, FAILED and SKIPPED retain provider evidence; submission is not delivery confirmation. Event deduplication includes recipient and completed-result identity, never one global unread flag.
 
-**Plan Status:** Complete. Ready for implementation on your signal.
+Report/dashboard endpoints display simulated-data labels and use Module 5's shared report calculations. Manually requested weekly and other CSV/PDF exports preserve selected date/period/category filters and origin labels. A seven-day report has its own 30-second reference requirement.
+
+## 8. Re-simulation, correction and test-only scope
+
+Current operational API rejects replacement of completed simulations. Re-simulation and retrospective corrections are future work until a complete atomic policy resolves:
+
+- Exact restoration of the original batch IDs/movement quantities, including later expiry and subsequent consumption.
+- Original price/cost snapshots and deterministic linked transaction/result/history treatment.
+- Existing donation/waste allocations and reports/model inputs that refer to the result.
+- Concurrent requests, idempotency, audit retention and failure rollback across the replacement.
+
+Do not create correction batches or delete/reinsert linked history as a shortcut. Separately committed reversals cannot provide the required atomic failure rollback.
+
+Pure test-only scenarios may pass fixture production/prediction/random-seed data to isolated calculations. They must not call the operational persistence endpoint with a bypassing quantity or mutate inventory, production, results or training history. The operational API has no override, dry-run-with-writes or force-replacement switch.
+
+## 9. Implementation order and planned verification
+
+Future implementation sequence:
+
+1. Align canonical DTOs, source references and unique operational-chain constraints with Module 0.
+2. Implement `SimulationCommitRepo` transaction/lock context and the protected transaction/RPC boundary.
+3. Integrate Module 3 joint feasibility, FIFO movement ownership and cost snapshots.
+4. Implement pure sales/time-slot calculations and deterministic fixture support for verification.
+5. Integrate all operational writes, history creation, total validation and audit into the single transaction.
+6. Add manager Controller/View flow and post-commit recipient events.
+7. Add permitted result/transaction reads, reports and the checks below.
+
+Transactions/rollback are required before exposing operational simulation, not work to add if time remains.
+
+| Planned scenario | Expected evidence |
+|---|---|
+| Administrator initiation, INACTIVE manager or malformed JWT | Rejected before mutation |
+| Missing stored prediction or confirmation; client quantity/actor/role/feasibility fields | Rejected; no inferred production quantity and no writes |
+| Default date near UTC/local midnight | Bakery-local current date used consistently |
+| Two categories share constrained flour/butter/yeast | Joint commitment validation prevents overspending |
+| FIFO receipt order differs from expiry order | Oldest receipt consumed, expired/inactive/unreceived batches excluded; equal receipt IDs ordered |
+| Simultaneous duplicate requests and response-lost retry | One committed chain, one deduction; second request links to completed result |
+| Failure after first batch update, snapshot update, movement insert, production insert, result insert, transaction insert, history insert or audit | Entire operation restored to pre-attempt state; no completed history and decision remains unprocessed |
+| Failure in the last category | Earlier categories also roll back; no per-category partial completion |
+| Retry after rollback | Current stock revalidated; exactly one new successful deduction |
+| Weather/holiday inputs varied for display with same stored baseline and stochastic fixture | No second overall context multiplier |
+| Zero confirmed production, zero prediction and high demand | Nonnegative results; sold never exceeds confirmation; lost sales retained |
+| Sale/slot rounding | Sum of transaction quantities equals result sold; slot totals preserve whole-day total |
+| Mixed batch unit costs and later master/catalogue price changes | FIFO cost and transaction revenue snapshots preserved |
+| Signed error, negative gross profit/margin and zero denominators | Valid signed values; Not Applicable percentages where undefined |
+| Successful/failed simulation history | Exactly one validated simulation source row on success and none on failed attempt |
+| Recipient isolation/push opt-out/provider acknowledgement | Personal visibility, no unwanted push; SUBMITTED not mislabelled DELIVERED |
+| Export versus View | Identical filters/calculations, simulated labels, no daily/detail double counting |
+
+Reference environment: Android 10+, at least 4 GB RAM, stable network >=10 Mbps, available backend, up to 20 categories, 365 daily records/category and 50 displayed records/list page. Verify a 12-hour simulation within 30 seconds and at least 95% of specified screen requests within 3 seconds. UI covers 360×640–412×915 dp. Module 6 plans >=80% independent UAT completion for login, prediction, production confirmation, simulation and leftover recording, without inventing participant counts or completed results.

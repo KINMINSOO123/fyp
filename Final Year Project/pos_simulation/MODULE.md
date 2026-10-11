@@ -1,250 +1,64 @@
-# Module 4: POS Simulation
+# Module 4: POS Simulation — Proposed Module Plan
 
-**Build Order:** 5th (depends on Module 0: Data Foundation, Module 1: Node.js Middleware, Module 2: ML Prediction, Module 3: Inventory + Integration)
-**Status:** High-Level Plan — ready for detailed breakdown
-**Architecture:** View → `PosSimulationController` → `PosSimulationService` → Repos/existing Services (see `../ARCHITECTURE.md`)
+Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. These are proposed components/checks for a Flutter starter repository, not implemented backend/database functionality. See the [detailed transaction plan](README.md), [schema](../../database_canonical_design.md), [architecture](../ARCHITECTURE.md) and [traceability](../../planning_documents_change_report.md).
 
----
+## 1. Scope and functional-module mapping
 
-## 1. Goal
+Technical Module 4 delivers **POS and Sales Simulation**, supplying data to **Demand Prediction**, **Leftover, Donation and Waste Management**, **Reporting and Dashboard**, and **Alerts and Notifications**. It simulates one bakery's operations. Customer ordering/payment, delivery/marketplaces and real POS hardware are excluded.
 
-Build the **POS Simulation System** — generates realistic daily sales data for testing and development training. It uses the stored `DailyPrediction` as the already-contextualised baseline, adds configured time-slot/stochastic variation, and handles stock-outs without applying weather, holiday, season or other contextual multipliers a second time.
+A Bakery Manager manually initiates simulation; a System Administrator cannot run it. The date defaults to today in the bakery timezone. Every included active category requires that date's stored prediction and explicit manager-confirmed production decision; zero confirmed production is valid. No fallback quantity or operational override bypasses confirmation.
 
-This is a **SUPPORTING** system (master doc §4.3). `DailyResult` stores detailed completed-simulation outcomes. After successful completion, one validated `DailySalesRecord` per category is created with `DataOrigin.SIMULATION_GENERATED`. Such records may support development training; evaluation using them is labelled simulation-based and never presented as real-world accuracy.
+## 2. Dependencies and proposed components
 
----
+Modules 0–1 provide normalized tables, row locking, JWT/ACTIVE-profile/role checks and Controller → Service → Repo boundaries. Module 2 supplies stored contextualised predictions. Module 3 supplies joint feasibility, FIFO and costs. Module 5 receives completed results for manual allocation/reports.
 
-## 2. Dependencies
+| Component | Responsibility |
+|---|---|
+| `PosSimulationController` | Manager initiation and permitted reads; thin router is a separate module |
+| `PosSimulationService` | Prerequisites/configuration and time-slot/stochastic sales from stored predictions |
+| `SalesDistributionService` | Whole-unit slot distribution preserving totals |
+| `TransactionRecordingService` | One Node PostgreSQL transaction from revalidation/FIFO through results/history |
+| `SimulationCommitRepo` | Parameterized transaction-scoped persistence/locking; no independent commits |
+| `DailyPredictionRepo`, `ProductionDecisionRepo`, `DailyProductionRepo`, `SalesTransactionRepo`, `DailyResultRepo`, `DailySalesRecordRepo`, `InventoryBatchRepo`, `InventoryRepo`, `InventoryLogRepo` | Related reads/writes within one unit of work |
+| `FifoBatchService`, `IngredientCostService` | Shared Module 3 deduction and actual FIFO snapshot cost logic |
+| `PosSimulationView` | Date, prerequisites, explicit run action, retry and simulated labels |
 
-- **Module 0 (Data Foundation)** — needs `sales_transactions`, `production_decisions`, `daily_production`, `daily_results`, `daily_sales_records`, `daily_predictions`
-- **Module 1 (Node.js Middleware)** — needs `ContextService` for traceability/display, `DailyPredictionRepo`, Express/auth infrastructure and `PosSimulationController`
-- **Module 2 (ML Prediction)** — indirectly: validated simulation-origin `DailySalesRecord` may be supplied by Node.js for development training
-- **Module 3 (Inventory + Integration)** — needs FIFO-aware `inventoryService.deductForProduction` + `reverseProductionDeduction` (for re-simulation); also imports the **reporting-only** `ingredientCostCalculator.costPerUnit(category)` to compute `daily_results.ingredient_cost` (cost on produced units). Finance stays decoupled from the Smart Recommendation Engine.
-- **`../ARCHITECTURE.md`** — defines the layered pattern this module follows
+## 3. Mandatory atomic workflow
 
----
+1. Verify JWT, ACTIVE profile and manager permission; validate date, predictions and confirmed decisions.
+2. Retrieve selected-date context for display/traceability. Do not multiply its weather/holiday/season factors into demand again. Complete external calls before inventory locks.
+3. Start one Node-owned PostgreSQL transaction. Serialize the date's production plan; lock decisions and shared inventory/batches deterministically. Re-read prerequisites, reject processed decisions and validate combined requirements.
+4. Deduct valid batches by ascending `received_date`, then `id`, excluding expired/inactive batches. Update snapshots and linked movements exactly once before sales processing.
+5. Process sales using configured stochastic/time-slot variation. Persist production, transactions, `DailyResult` and one validated `DailySalesRecord` per category with `SIMULATION_GENERATED` origin and source-result reference.
+6. Commit all writes together. Any failure rolls back batches, snapshots, movements, production, transactions, results and simulation history. Decisions remain unprocessed; retry revalidates stock.
 
-## 3. Sub-Modules
+Unique prediction → decision → production → result links and locks prevent double deduction. No `SimulationRun` or `LeftoverRecord` table is required. Deliver recipient notifications after commit; push failure cannot cause rerunning production.
 
-| # | Sub-Module | Layer | Purpose |
-|---|---|---|---|
-| 4.1 | Sales Transaction Repo | Repo | `sales_transactions` CRUD + findByDate + findBySlot + deleteByDate |
-| 4.2 | Daily Production Repo | Repo | `daily_production` CRUD + findByDate + deleteByDate |
-| 4.3 | Daily Result Repo (extended) | Repo | `daily_results` CRUD — shared with Module 3, adds write + deleteByDate methods |
-| 4.4 | Sales Distribution Service | Service | Apply time-slot weights (40/35/25) from constants (pure calc) |
-| 4.5 | `PosSimulationService` | Service | Core engine — stored-prediction baseline, stochastic/time-slot variation, stock-out logic |
-| 4.6 | `TransactionRecordingService` | Service | FIFO deduction once before sales, atomic operational writes, simulation-origin history creation and failure reversal |
-| 4.7 | `PosSimulationController` | Controller | Class-based endpoints to trigger simulation and query transactions/results |
-| 4.8 | Stock-Out Notification Service | Service | Emit alerts when simulated demand exceeds production (collaborates with `PosSimulationService`; persists/audits through Node.js services) |
-| 4.9 | Manual Correction Service | Service | Allows staff to correct produced/sold/demand/lost_sales and add notes after demo or real operation |
+## 4. Calculations and provenance
 
----
-
-## 4. Resolved Decisions
-
-| # | Decision | Choice | Rationale |
-|---|---|---|---|
-| 1 | Stock-out handling | Cap sales at production + track `lost_sales` column | Matches master doc's "STOCK OUT! 18 lost sales" example; requires Module 0 schema update |
-| 2 | Transaction granularity | Batched — each transaction has random qty 1-3 units | ~50-100 transactions/day per category; realistic for analytics |
-| 3 | Production qty source | Saved `production_decisions.final_selected_qty`, with optional `producedOverride` for tests/demo scenarios | Realistic manager decision path while still easy to demo |
-| 4 | Re-simulation | Allow with `forceRefresh` flag | Deletes existing data + restores inventory through correction FIFO batches, then re-inserts; useful for testing scenarios |
-| 5 | Context handling | Retrieve for traceability/display only | The stored `DailyPrediction` already incorporates relevant contextual effects; multiplying them again would double count. |
-| 6 | Historical output | Create validated `DailySalesRecord(unitsSold, SIMULATION_GENERATED)` only after success | Separates ML history from the detailed `DailyResult` and preserves provenance. |
-
----
-
-## 5. Schema Update Required (Module 0)
-
-The `lost_sales` decision requires adding columns to `daily_results`; the financial reporting layer requires additional financial columns and `sales_transactions` snapshots.
-
-```sql
-ALTER TABLE sales_transactions
-  ADD COLUMN unit_price numeric NOT NULL DEFAULT 0,   -- snapshot of bread_categories.selling_price at sale moment (RM)
-  ADD COLUMN subtotal   numeric NOT NULL DEFAULT 0;   -- quantity * unit_price (RM)
-
-ALTER TABLE daily_results
-  ADD COLUMN estimated_demand int,          -- units_sold + lost_sales; analysis only
-  ADD COLUMN lost_sales int DEFAULT 0,
-  ADD COLUMN remaining_unallocated_leftover int NOT NULL DEFAULT 0,
-  ADD COLUMN notes text,                    -- optional manual correction / stock-out note
-  ADD COLUMN revenue         numeric NOT NULL DEFAULT 0,  -- SUM(sales_transactions.subtotal) for this category-day
-  ADD COLUMN ingredient_cost numeric NOT NULL DEFAULT 0,  -- cost of all PRODUCED units (sold + leftover)
-  ADD COLUMN gross_profit    numeric NOT NULL DEFAULT 0;   -- revenue - ingredient_cost
+```text
+units_sold = min(simulated_demand, produced)
+lost_sales = max(0, simulated_demand - produced)
+estimated_demand = units_sold + lost_sales
+leftover = produced - units_sold
+sales_prediction_error = units_sold - predicted_units_sold
+leftover_rate_pct = leftover / produced * 100, or Not Applicable when produced = 0
+revenue = sum(transaction.quantity * transaction.unit_price)
+ingredient_cost = sum(abs(production_movement.change_grams) / 1000 * batch.unit_cost)
+gross_profit = revenue - ingredient_cost
+gross_profit_margin_pct = gross_profit / revenue * 100, or Not Applicable when revenue = 0
 ```
 
-**Column relationships after simulation:**
-```
-units_sold      ≤ produced                                  ← capped at production
-leftover        = produced - units_sold                    ← always ≥ 0
-estimated_demand = units_sold + lost_sales                 ← analysis only
-remaining_unallocated_leftover = leftover at completion
-waste_rate      = (leftover / produced) × 100
-error_pct       = |predicted_units_sold - units_sold| / units_sold × 100
-unit_price      = bread_categories.selling_price snapshot (captured per sale row)
-subtotal        = quantity * unit_price
-revenue         = SUM(sales_transactions.subtotal WHERE category+date match)
-ingredient_cost = produced * costPerUnit(category)         ← cost on PRODUCED, not sold (by design)
-gross_profit    = revenue - ingredient_cost
-```
+The proposed cost convention is MYR/kg; immutable batch cost snapshots and transaction price snapshots preserve history. Signed error and negative gross profit/margin are valid. Donated/unallocated leftovers are not automatically waste. Financial output is reporting-only and simulation-labelled. Do not add detailed transactions to their daily totals. ML still targets `DailySalesRecord.unitsSold`.
 
-**Financial data is reporting-only.** `revenue`, `ingredient_cost`, `gross_profit`, `unit_price`, `subtotal` are written by this module and never read back by prediction (Module 2) or the Smart Recommendation Engine (Module 3). They power the dashboard's financial view (Module 5). `ingredient_cost` is computed on **produced** (not sold) units so wasted/donated bread's cost counts — making waste visibly eat profit.
+## 5. Contracts and retry policy
 
-**Per-transaction snapshot:** when the simulator inserts each `sales_transactions` row, it copies the category's current `selling_price` into `unit_price` and computes `subtotal = quantity * unit_price`. Historical sale rows therefore retain the price in force at sale time even after `bread_categories.selling_price` is updated.
+`POST /api/simulations` accepts `{ date?: ISODate }`; Node derives the default date and actor. Reject client production/actor/role/feasibility fields. `GET /api/simulations/:date` and `GET /api/simulations/:date/transactions` return permitted filtered/paginated data to either active role.
 
----
+A completed decision cannot be simulated again. Duplicates return `409 ALREADY_SIMULATED` with a stored-result link and no writes. Re-simulation/retrospective correction are future work until an explicit atomic policy covers exact original batch movements, transactions, linked history, reports and leftover allocations. Correction batches/separate reversal commits do not substitute for rollback. Pure test fixtures must not write operational data or share a confirmation-bypassing endpoint.
 
-## 6. Endpoints (handled by `PosSimulationController`; registered by thin router modules)
+## 6. Implementation and verification plan
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/sales/simulate` | Trigger simulation `{ date, producedOverride?, forceRefresh? }` |
-| GET | `/api/sales/:date` | Get all transactions for a date (all categories, all slots) |
-| GET | `/api/sales/:date/summary` | Get daily_results for a date (all categories) |
-| PATCH | `/api/sales/:date/summary/:categoryId` | Manual correction `{ produced?, sold?, demand?, lost_sales?, notes? }` |
-| GET | `/api/sales/:date/slot/:slot` | Get transactions for a specific slot (morning/afternoon/evening) |
-| GET | `/api/sales/:date/category/:categoryId` | Get transactions for a specific category on a date |
+Implement later: contracts/uniqueness; transaction/locking Repo; FIFO/cost primitives; simulation calculations; atomic persistence; manager UI/post-commit recipient events; functional/failure/performance checks. Atomicity is a prerequisite.
 
----
-
-## 7. Simulation Flow
-
-```
-POST /api/sales/simulate { date: "2026-06-26", forceRefresh: false }
-  ↓
-PosSimulationService.simulateDay(date, options)
-  │
-  ├─ STEP 0: Handle re-simulation (if forceRefresh)
-  │   ├─ Check if daily_results exist for date
-  │   └─ If yes:
-  │       ├─ Read existing daily_production → get produced qty per category
-  │       ├─ Reverse inventory deductions (inventoryService.reverseProductionDeduction)
-  │       ├─ Delete sales_transactions for date
-  │       ├─ Delete daily_production for date
-  │       └─ Delete daily_results for date
-  │
-  ├─ STEP 1: Fetch prediction for date (predictionRepo.findByDate)
-  │
-  ├─ STEP 2: Fetch context for traceability/display only (ContextService)
-  │   → do not apply weather/holiday/season multipliers to the stored prediction again
-  │
-  ├─ STEP 3: Validate all confirmed quantities and required valid inventory
-  ├─ STEP 4: Deduct required ingredients through FIFO exactly once
-  │   → create linked inventory movements/idempotency reference
-  │
-  ├─ STEP 5: For each bread category:
-  │   ├─ 3a. Determine production qty (production_decisions.final_selected_qty OR producedOverride for tests)
-  │   ├─ 3b. Calculate simulated demand:
-  │   │       estimated_demand = stored predicted_units_sold × configured stochastic variation
-  │   ├─ 3c. Apply stock-out logic:
-  │   │       sold = min(demand, produced)
-  │   │       leftover = produced - sold
-  │   │       lost_sales = max(0, demand - produced)
-  │   ├─ 3c'. IF lost_sales > 0:
-  │   │       → notificationService.emitStockOutAlert(categoryId, date, lost_sales)
-  │   │       → log to system_logs + push event to dashboard subscribers
-  │   ├─ 3d. Distribute sold across 3 time slots (40/35/25 + noise)
-│   ├─ 3e. Generate transactions per slot: qty 1-3 each, random times, each row carries
-│   │        unit_price = category.selling_price (snapshot) + subtotal = quantity * unit_price
-│   ├─ 3f. Record daily_production row linked to production_decision_id when available
-│   ├─ 3g. Record DailyResult row (with estimated_demand + lost_sales) + financial cache:
-│   │        revenue         = SUM(transactions.subtotal) for this category-day
-│   │        ingredient_cost = produced * ingredientCostCalculator.costPerUnit(category)
-│   │        gross_profit    = revenue - ingredient_cost   (cost on PRODUCED, not sold)
-│   └─ 3h. Create validated DailySalesRecord(unitsSold, SIMULATION_GENERATED, source DailyResult)
-  │
-  ├─ STEP 6: Commit the completed simulation atomically
-  └─ ON any failure after deduction: roll back transaction or reverse linked FIFO movements;
-     do not store a completed result or DailySalesRecord
-```
-
-**Manual correction rule:** When staff correct a result, recalculate `leftover`, `lost_sales`, `waste_rate_pct`, `error_units`, and `error_pct` from the corrected values, **and recompute the financial cache** `revenue`, `ingredient_cost` (on the corrected `produced`), and `gross_profit`, store `notes`, and log the correction in `system_logs`. This is for realistic demo cleanup and real-world data entry mistakes; it does not change raw `sales_transactions` (hence `revenue` is unaffected by a correction that only changes `produced`/`sold` accounting) unless a later enhancement adds transaction-level editing.
-
----
-
-## 8. Stock-Out Example
-
-```
-Croissants on a rainy public holiday:
-├─ stored predicted_units_sold: 110
-│  (the prediction already incorporated the relevant weather/holiday context)
-├─ produced: 100 (confirmed feasible production decision)
-├─ stochastic variation produces estimated_demand: 118
-├─ no weather/holiday multiplier is reapplied
-├─ units_sold: min(118, 100) = 100
-├─ leftover: 100 - 100 = 0
-├─ lost_sales: 118 - 100 = 18    ← STOCK OUT
-├─ waste_rate: 0%
-└─ DailySalesRecord: unitsSold=100, dataOrigin=SIMULATION_GENERATED
-
-Morning (40%):  40 croissants sold (~20 transactions, qty 1-3 each)
-Afternoon (35%): 35 croissants sold (~18 transactions)
-Evening (25%):  25 croissants sold (~13 transactions)
-Total: 100 sold, 0 leftover, 18 lost sales
-```
-
----
-
-## 9. File Structure (extends Node.js `backend/src/`)
-
-> Follows the layered architecture from `../ARCHITECTURE.md`: Model → Repo → Service → Controller.
-
-```
-backend/src/
-├── repositories/
-│   ├── salesTransactionRepo.ts      # NEW — sales_transactions CRUD
-│   ├── dailyProductionRepo.ts       # NEW — daily_production CRUD
-│   ├── dailyResultRepo.ts           # SHARED with Module 3 (detailed completed simulation)
-│   └── dailySalesRecordRepo.ts      # historical units_sold + DataOrigin
-├── services/
-│   ├── posSimulationService.ts      # NEW — stored-prediction baseline engine
-│   ├── salesDistributionService.ts  # NEW — slot weight logic (pure calc)
-│   ├── transactionRecordingService.ts # NEW — writes results, deducts inventory
-│   ├── notificationService.ts       # stock-out alerts (collaborates with PosSimulationService)
-│   └── ... (existing services from Modules 1, 3)
-├── controllers/
-│   └── posSimulationController.ts   # FILLS Module 1 stub; routes remain modules
-```
-
----
-
-## 10. Integration Points
-
-| Talks To | Direction | Purpose |
-|---|---|---|
-| Module 1 ContextService | Internal call | Fetch weather + calendar for traceability/display, not multiplier application |
-| Module 1 DailyPredictionRepo | Internal call | Read the stored prediction baseline for the date |
-| Module 3 productionDecisionService | Internal call | Read manager-selected production quantities when available |
-| Module 3 inventoryService | Internal call | Deduct ingredients from FIFO batches after production + reverse on re-simulation |
-| Module 1 systemLogRepo | Internal call | Write stock-out alert events to `system_logs` audit trail |
-| Module 5 Dashboard | Push event | Real-time stock-out alert surfaced on the manager dashboard |
-| Module 2 (indirect) | Via validated DTO from Node.js | `SIMULATION_GENERATED` DailySalesRecord may support development training/evaluation with explicit labelling |
-| Supabase | Repo calls | Read predictions, write transactions/production/results |
-
----
-
-## 11. Cross-Module Dependencies (updates needed)
-
-| Dependency | Impact | File to Update |
-|---|---|---|
-| Module 0 schema | Add `estimated_demand`, `lost_sales`, `remaining_unallocated_leftover` to `daily_results`; add `daily_sales_records` with `DataOrigin`; retain financial snapshot fields | `data_foundation/README.md` + `MODULE.md` |
-| Module 3 inventoryService | Add `reverseProductionDeduction` method (for re-simulation) | `inventory_integration/README.md` |
-| Module 3 ingredientCostCalculator | New reporting-only service: `costPerUnit(category)` used to compute `ingredient_cost` on produced units | `inventory_integration/README.md` |
-
----
-
-## 12. What This Module Does NOT Include
-
-- ❌ Generating predictions → Module 2 (this module consumes predictions)
-- ❌ Inventory constraint logic → Module 3 (this module deducts inventory after production)
-- ❌ Dashboard UI → Module 5 (this module provides the data)
-- ❌ Automatic scheduled simulation → out of prototype scope; Module 6 only sends reminder notifications, and the manager manually triggers `/api/sales/simulate`
-
----
-
-## 13. Next Steps (Detailed Breakdown)
-
-See `README.md` in this folder for the detailed plan (repo methods, service function signatures, controller code, verification).
-
----
-
-**Module Status:** High-level plan complete. Ready for detailed breakdown on your signal.
+The [README](README.md) specifies duplicate/concurrent requests, failure injection after each write stage, FIFO versus FEFO, snapshot costs/prices, zero production, signed error, single-context logic, role rejection and a 12-hour simulation within 30 seconds for up to 20 categories. All are planned checks, not completed results.

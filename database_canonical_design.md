@@ -1,29 +1,31 @@
 # Smart Bakery Database Canonical Design
 
-**Status:** PLANNED CANONICAL DESIGN — NOT IMPLEMENTED  
-**Design date:** 31 July 2026  
-**Chapter target:** Chapter 4.5.2 Entity-Relationship Diagram  
-**Primary input:** `database_schema_verification.md`  
+**Status:** PLANNED CANONICAL DESIGN — NOT IMPLEMENTED
+**Historical design snapshot:** 31 July 2026; reconciled 11 October 2026
+**Chapter target:** Chapter 4.5.2 Entity-Relationship Diagram
+**Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, especially §§4.5.1–4.5.4, 4.7–4.9; repository report mirror: [RSW_SooKinMin_Project1.docx.md](RSW_SooKinMin_Project1.docx.md)
 **Implementation scope:** Design only; this document is not a migration and does not modify application code
 
-## 1. Approval statement
+## 1. Authority and implementation status
 
-This document is the final approved relational design for the proposed Smart Bakery Food Waste Reduction System. It resolves the database-verification issues while retaining the project's architecture:
+This is the current reconciled planning design. The latest DOCX takes precedence over the historical July audit and any earlier approval wording. It retains the report's architecture:
 
 - Supabase Auth owns identities and credentials.
-- Node.js/Express owns all application-table access through Repos.
+- Node.js/Express Controllers delegate to Services and Repos for protected business requests and all application-table writes.
 - FastAPI never reads or writes Supabase.
-- Flutter accesses application data only through the authenticated Node.js boundary.
+- Flutter uses Supabase Authentication, recipient-scoped Supabase Realtime foreground notifications and FCM background notifications. Ordinary application-table CRUD and notification mark-read actions use Node (§§4.2.4, 4.8).
 - Historical operational records are retained; master data is deactivated rather than cascade-deleted.
 - The POS completion workflow is one Node-owned PostgreSQL transaction/RPC.
 
 No table in this document is implementation-verified. The complete design remains **PLANNED** until migrations, generated database types and application Repos exist.
 
+The application serves one bakery on Android. Four example categories and five ingredients are seed examples, not limits; algorithms handle configured active categories and the reference workload of up to 20 categories. No customer ordering/payment, delivery/marketplace, real POS hardware, multi-branch operation or automatic background scheduling is introduced.
+
 ## 2. Canonical conventions
 
-| Area | Approved convention |
+| Area | Proposed convention |
 |---|---|
-| Identifiers | UUID primary keys generated with `gen_random_uuid()`, except `notification_preferences`, which uses its natural composite key |
+| Identifiers | UUID primary keys except `user_profiles.user_id` (Auth FK/PK), `notification_preferences` and `prediction_calendar_events` (composite keys) |
 | Time | `timestamptz` for instants; business dates use `date`; bakery-local opening/sale times use `time` |
 | Naming | PostgreSQL `snake_case`; application mappings may use language-standard casing |
 | Controlled values | `text` plus named CHECK constraints; canonical values are uppercase |
@@ -31,7 +33,7 @@ No table in this document is implementation-verified. The complete design remain
 | Quantities | `integer` for bread units; `numeric(14,3)` for ingredient grams |
 | Deletion | `ON DELETE RESTRICT` for retained domain/history links; deactivate categories, ingredients, partners, profiles and device tokens |
 | Updated timestamps | A shared `set_updated_at()` BEFORE UPDATE trigger on tables containing `updated_at` |
-| RLS | Enabled on every `public` table; no direct `authenticated` table policies; Node server credentials are the sole application-data boundary |
+| RLS | Enabled on every `public` table; recipient-only authenticated SELECT on eligible `notifications` is the narrow Realtime exception; all writes and ordinary CRUD use Node |
 | Secrets | Never stored in PostgreSQL, Flutter, or the repository; use protected server environment variables or a secret manager |
 
 ## 3. Controlled values
@@ -53,16 +55,16 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Model lifecycle | `CANDIDATE`, `ACTIVE`, `INACTIVE`, `REJECTED` |
 | Evaluation label | `ACTUAL_ONLY`, `IMPORTED_HISTORICAL_ONLY`, `SIMULATION_BASED`, `MIXED_NON_SIMULATION` |
 | Prediction mode | `MODEL`, `COLD_START` |
-| Production option | `FULL_PREDICTION`, `REDUCED_DUE_CONSTRAINT`, `MANUAL_OVERRIDE` |
+| Production option | `ACCEPT_RECOMMENDATION`, `REDUCE`, `MANUAL_OVERRIDE` |
 | Sales time slot | `MORNING`, `AFTERNOON`, `EVENING` |
-| Donation status | `RECORDED`, `PICKED_UP`, `DELIVERED` |
+| Donation status | `PENDING`, `COLLECTED`, `COMPLETED`, `CANCELLED` |
 | Notification severity | `INFO`, `WARNING`, `CRITICAL` |
-| Notification type | `LOW_STOCK`, `LOW_CONFIDENCE`, `LOST_SALES`, `EXCESSIVE_LEFTOVER`, `PREDICTION_REMINDER`, `SIMULATION_REMINDER`, `DONATION_STATUS`, `MODEL_OPERATION_FAILURE`, `EXTERNAL_SERVICE_FAILURE`, `SYSTEM_FAILURE`, `ADMINISTRATIVE_EVENT` |
+| Notification type | `LOW_STOCK`, `EXPIRING_BATCH`, `EXPIRED_BATCH`, `LOW_CONFIDENCE`, `LOST_SALES`, `EXCESSIVE_LEFTOVER`, `DONATION_STATUS`, `MODEL_OPERATION_FAILURE`, `EXTERNAL_SERVICE_FAILURE`, `SYSTEM_FAILURE`, `ADMINISTRATIVE_EVENT` |
 | Push status | `PENDING`, `SUBMITTED`, `DELIVERED`, `FAILED`, `SKIPPED` |
 | Audit outcome | `SUCCESS`, `FAILURE` |
 | Audit severity | `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
-`disposal_reason`, `location_type`, notification messages and audit event types remain validated non-blank text where a closed business list would be unnecessarily restrictive. `location_type` is free text because no complete bakery-location taxonomy has been approved.
+`disposal_reason`, `location_type`, notification messages and audit event types remain validated non-blank text where a closed business list would be unnecessarily restrictive. `location_type` is free text because no complete bakery-location taxonomy is specified.
 
 ## 4. Final table catalogue
 
@@ -100,6 +102,8 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Audit | `system_logs` | Structured actor/action/entity/outcome audit and operational events |
 
 `sales_by_timeslot` remains a computed PostgreSQL view, not a base table.
+
+Counts derived from this catalogue: **29 public application tables**, **1 external Auth table**, **1 computed view**, and **0 PostgreSQL enum types**. Section 3 has **21 controlled-value domains**, implemented as text CHECK constraints; these are not 21 database enum types. Pending-action indicators are derived on app open/refresh or explicit state requests, not scheduled reminder rows.
 
 ## 5. Final columns, keys and constraints
 
@@ -166,7 +170,7 @@ Value/type CHECK:
 - `TEXT` requires `jsonb_typeof(setting_value) = 'string'`; and
 - `JSON` requires `jsonb_typeof(setting_value)` in `object`, `array`.
 
-Only approved non-secret keys may be stored. Weather, calendar and FCM credentials remain in protected Node server environment variables or a secret manager. Non-secret endpoints, locations, enablement flags and thresholds may use this table.
+Only defined non-secret keys may be stored. Weather, calendar and FCM credentials remain in protected Node server environment variables or a secret manager. Non-secret endpoints, locations, enablement flags and thresholds may use this table.
 
 ### 5.2 Catalogue and inventory
 
@@ -193,7 +197,7 @@ Only approved non-secret keys may be stored. Weather, calendar and FCM credentia
 | `reorder_threshold` | `numeric(14,3)` | NOT NULL; default `0` | CHECK `reorder_threshold >= 0` |
 | `is_active` | `boolean` | NOT NULL; default `true` | Soft deactivation |
 
-Recipes and inventory are stored in grams. `unit` describes commercial purchasing/cost display and is normalized before operational calculations.
+Recipes and inventory are stored in grams. `unit` describes commercial purchasing/cost display and is normalized before operational calculations. For unambiguous historical costing, this plan normalizes `inventory_batches.unit_cost` to currency per kilogram when a batch is received; its value is immutable. This is a storage mapping for the report's batch-cost snapshot, not a new report requirement. Current ingredient master prices never recost completed production.
 
 #### `recipes`
 
@@ -226,7 +230,7 @@ UNIQUE (`bread_category_id`, `ingredient_id`). This is the category/ingredient j
 | `expiry_date` | `date` | NOT NULL | Participates in date check |
 | `initial_quantity_grams` | `numeric(14,3)` | NOT NULL | CHECK `> 0` |
 | `remaining_quantity_grams` | `numeric(14,3)` | NOT NULL | CHECK `>= 0` and `<= initial_quantity_grams` |
-| `unit_cost` | `numeric(12,2)` | NOT NULL | CHECK `unit_cost >= 0`; restock cost snapshot |
+| `unit_cost` | `numeric(12,2)` | NOT NULL | CHECK `unit_cost >= 0`; immutable receipt cost snapshot per kilogram |
 | `source` | `text` | NULL | If present, CHECK non-blank |
 | `status` | `text` | NOT NULL; default `ACTIVE` | CHECK `ACTIVE`, `DEPLETED`, `EXPIRED`, `DISCARDED` |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
@@ -237,17 +241,19 @@ Status consistency:
 - `ACTIVE` requires `remaining_quantity_grams > 0`; and
 - expired/discarded rows cannot be selected by the production-deduction RPC.
 
+Valid batches must be `ACTIVE`, received by the production date and not expired on that date. This plan uses `received_date <= production_date` and `expiry_date >= production_date`, treating the printed expiry date as the last usable date. Select valid batches in ascending `received_date, id` order; expiry filters eligibility and does not determine FIFO ordering. On each relevant request, reconcile expired status/available balances without a scheduled job. Cached inventory never replaces date-specific batch eligibility checks.
+
 #### `inventory_log`
 
 | Column | PostgreSQL type | Null/default | Key and constraints |
 |---|---|---|---|
 | `id` | `uuid` | NOT NULL; default `gen_random_uuid()` | PK |
-| `operation_id` | `uuid` | NOT NULL | Idempotency/transaction grouping key; not a `SimulationRun` entity |
+| `operation_id` | `uuid` | NOT NULL | Transaction/movement grouping key; decision locks and unique links enforce idempotency; not a `SimulationRun` entity |
 | `inventory_id` | `uuid` | NOT NULL | FK → `inventory.id` ON DELETE RESTRICT |
 | `batch_id` | `uuid` | NOT NULL | FK → `inventory_batches.id` ON DELETE RESTRICT |
 | `production_decision_id` | `uuid` | NULL | FK → `production_decisions.id` ON DELETE RESTRICT |
 | `change_grams` | `numeric(14,3)` | NOT NULL | CHECK `change_grams <> 0` |
-| `reason` | `text` | NOT NULL | CHECK approved movement reasons |
+| `reason` | `text` | NOT NULL | CHECK defined movement reasons |
 | `effective_date` | `date` | NOT NULL | — |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
@@ -273,7 +279,7 @@ Status consistency:
 |---|---|---|---|
 | `id` | `uuid` | NOT NULL; default `gen_random_uuid()` | PK |
 | `event_date` | `date` | NOT NULL | Part of UNIQUE |
-| `event_type` | `text` | NOT NULL | CHECK approved event types; part of UNIQUE |
+| `event_type` | `text` | NOT NULL | CHECK defined event types; part of UNIQUE |
 | `event_name` | `text` | NOT NULL | CHECK non-blank; part of UNIQUE |
 | `demand_multiplier` | `numeric(6,3)` | NULL | CHECK NULL or `demand_multiplier > 0` |
 | `fetched_at` | `timestamptz` | NOT NULL; default `now()` | — |
@@ -334,7 +340,7 @@ Constraints:
 - `CANDIDATE`/`REJECTED` require activation fields NULL; and
 - `ACTIVE`/`INACTIVE` require activation fields non-null, retaining previous activation metadata.
 
-Retraining inserts a new candidate. Evaluation does not activate it. Administrator activation changes the previous active row to `INACTIVE` and the selected evaluated candidate to `ACTIVE` in one transaction. Restoration reactivates a retained valid inactive row; rows and artifacts are not overwritten.
+Administrator-initiated retraining inserts a new candidate. Evaluation, explicit activation and restoration are separate operations. Activation compares candidate and current model MAE on the same chronologically later holdout not used for fitting or parameter selection; a higher candidate MAE rejects activation (NFR-ACC-05). Missing/invalid candidate evaluations block activation; when an active model exists, missing or incomparable active/candidate evaluations block replacement. First activation requires valid reviewed candidate evaluation and explicit administrator confirmation without inventing an incumbent score. The transaction changes the previous active row to `INACTIVE` and selected evaluated candidate to `ACTIVE`; any failure retains the previous active model. Restoration reactivates a retained valid inactive row after explicit administrator review and applicable validity/evaluation checks; history/artifacts are retained. Linear Regression is the comparison baseline; operational MODEL predictions require a valid active Random Forest model.
 
 #### `model_evaluations`
 
@@ -344,6 +350,8 @@ Retraining inserts a new candidate. Evaluation does not activate it. Administrat
 | `model_version_id` | `uuid` | NOT NULL | FK → `ml_model_versions.id` ON DELETE RESTRICT |
 | `holdout_start` | `date` | NOT NULL | CHECK `holdout_start <= holdout_end` |
 | `holdout_end` | `date` | NOT NULL | Participates in date check |
+| `holdout_manifest` | `jsonb` | NOT NULL | Planned reproducibility metadata: ordered observation IDs/origins, targets and split/parameter-selection exclusions |
+| `holdout_fingerprint` | `text` | NOT NULL | Planned digest of canonical evaluation dataset; equal dates alone are insufficient |
 | `data_origins` | `text[]` | NOT NULL | Non-empty; members limited to exact `DataOrigin` values |
 | `evaluation_label` | `text` | NOT NULL | CHECK canonical labels |
 | `mae` | `numeric(14,4)` | NOT NULL | CHECK `mae >= 0` |
@@ -356,14 +364,14 @@ Retraining inserts a new candidate. Evaluation does not activate it. Administrat
 
 Additional checks:
 
-- `data_origins` is stored sorted/distinct and must equal one of the seven non-empty combinations of the three approved origins;
+- `data_origins` is stored sorted/distinct and must equal one of the seven non-empty combinations of the three defined origins;
 - `mape IS NULL` exactly when `mape_sample_count = 0`;
 - if `SIMULATION_GENERATED` occurs in `data_origins`, label is `SIMULATION_BASED`;
 - `ACTUAL_ONLY` contains only `ACTUAL_TRANSACTION`;
 - `IMPORTED_HISTORICAL_ONLY` contains only `IMPORTED_HISTORICAL`; and
 - `MIXED_NON_SIMULATION` contains actual and imported origins, never simulation.
 
-Node validates that the holdout is chronologically later than the referenced model's training period before calling FastAPI and before persisting the returned result.
+Node validates that holdout observations are chronologically later and were used neither for fitting nor parameter selection. RF/LR use the same training/test observations. A reproducible evaluation dataset fingerprint and ordered observation/source references must be retained with evaluation metadata (planned `holdout_manifest` JSONB and `holdout_fingerprint` text fields) so equal dates alone cannot falsely establish the same dataset. MAE/RMSE include zero actuals; only MAPE excludes them. Undefined MAPE or R² remains NULL with an explanatory DTO/UI label, never a perfect score. MAPE < 10% and R² > 0.85, if used, are optional aspirational targets, not acceptance gates or achieved results.
 
 #### `feature_importance`
 
@@ -385,13 +393,34 @@ UNIQUE (`model_version_id`, `feature_name`) and UNIQUE (`model_version_id`, `ran
 | `target_date` | `date` | NOT NULL | UNIQUE with category |
 | `bread_category_id` | `uuid` | NOT NULL | FK → `bread_categories.id` ON DELETE RESTRICT |
 | `predicted_units_sold` | `integer` | NOT NULL | CHECK `predicted_units_sold >= 0` |
-| `confidence` | `numeric(5,2)` | NOT NULL | CHECK `0 <= confidence <= 100` |
+| `confidence` | `numeric` | NULL for COLD_START only | MODEL requires numeric `0 <= confidence <= 100`; COLD_START requires NULL |
 | `prediction_mode` | `text` | NOT NULL | CHECK `MODEL`, `COLD_START` |
 | `model_version_id` | `uuid` | NULL | FK → `ml_model_versions.id` ON DELETE RESTRICT |
 | `weather_record_id` | `uuid` | NULL | FK → `weather_records.id` ON DELETE RESTRICT |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
-UNIQUE (`target_date`, `bread_category_id`). `MODEL` requires `model_version_id`; `COLD_START` requires it to be NULL. Context has already been applied to `predicted_units_sold` and is not multiplied again during POS simulation.
+Confidence is stored without display-scale rounding so threshold labels use the same persisted numerical value returned by ConfidenceService. Round only the displayed percentage.
+
+UNIQUE (`target_date`, `bread_category_id`). `MODEL` requires numerical confidence and a model-version reference validated as an active valid RF version when generated; later deactivation retains that historical reference. `COLD_START` requires both fields NULL. Cross-column SQL sketch (proposed, not a migration):
+
+```sql
+CHECK (
+  (prediction_mode = 'MODEL' AND model_version_id IS NOT NULL
+    AND confidence IS NOT NULL AND confidence BETWEEN 0 AND 100)
+  OR
+  (prediction_mode = 'COLD_START' AND model_version_id IS NULL
+    AND confidence IS NULL)
+)
+```
+
+`ConfidenceService` calculates the report §4.9.2 model output from per-tree mean `mu` and standard deviation `sigma`:
+
+```text
+predicted_units_sold = max(0, round(mu))
+confidence = 100 * max(0, min(1, 1 - sigma / max(abs(mu), 1)))
+```
+
+MODEL requires at least 30 distinct validated daily observations selected by actual → imported → simulation priority and a valid active RF model. Otherwise `Bc` is the category's average available valid units-sold observations, or its configured base quantity only if no valid observations exist. `COLD_START` uses `max(0, round(Bc * Dt * Mt * Wt * Ht))` for configured weekday, monsoon, weather and holiday factors, with null confidence and a low-confidence heuristic label. MODEL is Low Confidence below the configurable threshold, initially 75%. Confidence measures tree agreement, not an accuracy probability or a guarantee of improvement. Context has already been applied to the stored prediction and is not multiplied again during POS simulation.
 
 #### `prediction_calendar_events`
 
@@ -427,11 +456,11 @@ UNIQUE (`target_date`, `bread_category_id`). A composite FK (`prediction_id`, `t
 
 Option checks:
 
-- `FULL_PREDICTION`: final quantity equals recommended production and reason is NULL;
-- `REDUCED_DUE_CONSTRAINT`: final quantity is below recommended production and reason is non-blank; and
+- `ACCEPT_RECOMMENDATION`: final quantity equals recommended production and reason is NULL;
+- `REDUCE`: final quantity is below recommended production and reason is non-blank; and
 - `MANUAL_OVERRIDE`: reason is non-blank and final quantity remains within `max_producible`.
 
-Confirmation stores authorization only; it does not deduct inventory.
+Confirmation stores authorization only; it does not deduct inventory. The Service locks/checks all outstanding decisions for the date and validates their combined recipe requirements. A revision replaces the old quantity, never sums both versions. Processed decisions (those with a linked `daily_production`) are immutable and excluded from outstanding commitments. Affected unconfirmed recommendations are recalculated.
 
 #### `daily_production`
 
@@ -465,16 +494,18 @@ UNIQUE (`production_date`, `bread_category_id`) and UNIQUE (`id`, `production_da
 | `leftover` | `integer` | Generated/stored | `produced - units_sold` |
 | `remaining_unallocated_leftover` | `integer` | NOT NULL | CHECK `0 <= value <= produced - units_sold`; supplied/maintained transactionally |
 | `leftover_rate_pct` | `numeric(7,4)` | Generated/stored; nullable | When produced > 0: `(produced - units_sold) / produced * 100`; otherwise NULL |
-| `error_units` | `integer` | Generated/stored | `(units_sold + lost_sales) - predicted_units_sold` |
+| `sales_prediction_error` | `integer` | Generated/stored | `units_sold - predicted_units_sold`; signed |
 | `notes` | `text` | NULL | — |
 | `revenue` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `revenue >= 0`; transactionally verified sales subtotal cache |
-| `ingredient_cost` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `ingredient_cost >= 0`; reporting only |
+| `ingredient_cost` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `ingredient_cost >= 0`; sum actual FIFO consumption at immutable batch cost snapshots |
 | `gross_profit` | `numeric(14,2)` | Generated/stored | `revenue - ingredient_cost`; may be negative |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
 UNIQUE (`result_date`, `bread_category_id`) and UNIQUE (`id`, `result_date`, `bread_category_id`). Composite FKs ensure the linked prediction and production have the same date/category. One production produces at most one daily result because `daily_production_id` is unique.
 
 The ambiguous `error_pct` is removed. Percentage error for reports remains a computed DTO using a clearly selected denominator. `waste_rate_pct` is replaced by `leftover_rate_pct`; confirmed disposal remains in `waste_records`.
+
+For the corresponding production decision, `ingredient_cost = sum(abs(PRODUCTION_DEDUCTION.change_grams) / 1000 * inventory_batches.unit_cost)`, rounded once to reporting currency precision. `revenue = sum(sales_transactions.quantity * unit_price)`; report either these details or the verified daily total, never add both. `gross_profit = revenue - ingredient_cost`; `gross_profit_margin_pct = gross_profit / revenue * 100`. Signed error and negative gross profit/margin are valid; zero-denominator percentages display **Not Applicable**. Leftover rate counts all unsold units; actual waste counts confirmed disposal only. These financial figures are simulation-labelled reporting estimates, not payment/accounting functionality.
 
 #### `sales_transactions`
 
@@ -513,7 +544,7 @@ A partial unique index on normalized lower-case `name` where `is_active = true` 
 | `charity_partner_id` | `uuid` | NOT NULL | FK → `charity_partners.id` ON DELETE RESTRICT |
 | `donation_date` | `date` | NOT NULL | CHECK `donation_date >= daily result date` in allocation RPC |
 | `quantity` | `integer` | NOT NULL | CHECK `quantity > 0` |
-| `status` | `text` | NOT NULL; default `RECORDED` | CHECK `RECORDED`, `PICKED_UP`, `DELIVERED` |
+| `status` | `text` | NOT NULL; default `PENDING` | CHECK `PENDING`, `COLLECTED`, `COMPLETED`, `CANCELLED` |
 | `confirmed_by` | `uuid` | NOT NULL | FK → `user_profiles.user_id` ON DELETE RESTRICT |
 | `notes` | `text` | NULL | — |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
@@ -566,10 +597,10 @@ Checks require both related-entity fields to be NULL or both non-null, and requi
 | `user_id` | `uuid` | NOT NULL | Composite PK; FK → `user_profiles.user_id` ON DELETE RESTRICT |
 | `notification_type` | `text` | NOT NULL | Composite PK; CHECK canonical notification types |
 | `in_app_enabled` | `boolean` | NOT NULL; default `true` | — |
-| `push_enabled` | `boolean` | NOT NULL; default `true` | — |
+| `push_enabled` | `boolean` | NOT NULL; default `false` | Explicit recipient opt-in |
 | `updated_at` | `timestamptz` | NOT NULL; default `now()` | Updated-at trigger |
 
-One row controls one user's preference for one notification type. Missing rows use application defaults of enabled/enabled until the row is created.
+One row controls one user's preference for one notification type. Missing rows do not authorize push: require an explicit enabled preference and OS permission plus a valid active recipient-owned token. In-app defaults may be enabled. Preference and token writes pass through Node.
 
 #### `fcm_tokens`
 
@@ -600,6 +631,7 @@ This is the smallest normalized structure that records delivery per recipient de
 | `attempted_at` | `timestamptz` | NULL | Time submission was attempted |
 | `delivered_at` | `timestamptz` | NULL | Time delivery was confirmed, where supported |
 | `failure_reason` | `text` | NULL | Required non-blank for `FAILED`; NULL otherwise |
+| `skip_reason` | `text` | NULL | Planned explanatory metadata; required non-blank for `SKIPPED`, NULL otherwise |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 | `updated_at` | `timestamptz` | NOT NULL; default `now()` | Updated-at trigger |
 
@@ -609,7 +641,9 @@ Status checks:
 - `SUBMITTED`: token, `attempted_at` and provider message ID are non-null; delivery/failure are NULL;
 - `DELIVERED`: token, attempt time, provider message ID and delivery time are non-null; failure is NULL;
 - `FAILED`: token and attempt time are non-null; delivery is NULL; failure reason is non-blank; provider ID may be NULL; and
-- `SKIPPED`: token may be NULL; provider ID, attempt and delivery times are NULL; failure reason is NULL.
+- `SKIPPED`: token may be NULL; provider ID, attempt and delivery times are NULL; failure reason is NULL; skip_reason records why no dispatch occurred.
+
+`skip_reason` is a planning elaboration of delivery-outcome details: for example disabled/missing push preference, inactive account or no valid recipient-owned token. It is NULL for every status other than SKIPPED.
 
 If both timestamps exist, `delivered_at >= attempted_at`. A partial unique index permits one row per (`notification_id`, `fcm_token_id`, `attempt_number`) when the token is non-null. A second partial unique index permits at most one tokenless `SKIPPED` row per notification.
 
@@ -674,7 +708,7 @@ Entity type/ID must be both NULL or both non-null. Logs are append-only through 
 
 ## 7. Canonical indexes
 
-PK and UNIQUE constraints create implicit unique indexes. The following additional/partial indexes are approved.
+PK and UNIQUE constraints create implicit unique indexes. The following additional/partial indexes are planned.
 
 | Table | Canonical indexes |
 |---|---|
@@ -686,7 +720,7 @@ PK and UNIQUE constraints create implicit unique indexes. The following addition
 | `ingredients` | PK; UNIQUE (`name`); `idx_ingredients_active(is_active, name)` |
 | `recipes` | PK; UNIQUE (`bread_category_id`, `ingredient_id`); `idx_recipes_ingredient(ingredient_id)` |
 | `inventory` | PK; UNIQUE (`ingredient_id`) |
-| `inventory_batches` | PK; `idx_inventory_batches_fifo(ingredient_id, status, expiry_date, received_date, id)`; `idx_inventory_batches_expiry(status, expiry_date)` |
+| `inventory_batches` | PK; `idx_inventory_batches_fifo(ingredient_id, received_date, id) WHERE status = 'ACTIVE'`; `idx_inventory_batches_expiry(status, expiry_date)` |
 | `inventory_log` | PK; `idx_inventory_log_operation(operation_id)`; `idx_inventory_log_inventory_date(inventory_id, effective_date)`; `idx_inventory_log_batch(batch_id)`; `idx_inventory_log_decision(production_decision_id)` |
 | `weather_records` | PK; UNIQUE (`weather_date`)—no redundant second date index |
 | `calendar_events` | PK; UNIQUE (`event_date`, `event_type`, `event_name`); `idx_calendar_events_date(event_date)` |
@@ -703,13 +737,13 @@ PK and UNIQUE constraints create implicit unique indexes. The following addition
 | `charity_partners` | PK; partial UNIQUE (`lower(name)`) WHERE active; `idx_charity_partners_active(is_active, name)` |
 | `donations` | PK; `idx_donations_result_date(daily_result_id, donation_date)`; `idx_donations_partner_status(charity_partner_id, status)` |
 | `waste_records` | PK; `idx_waste_result_date(daily_result_id, waste_date)` |
-| `notifications` | PK; `idx_notifications_recipient_unread(recipient_user_id, is_read, created_at DESC)`; partial unread-related dedupe UNIQUE; partial unread-unrelated-type dedupe UNIQUE |
+| `notifications` | PK; `idx_notifications_recipient_unread(recipient_user_id, is_read, created_at DESC)` |
 | `notification_preferences` | Composite PK (`user_id`, `notification_type`) |
 | `fcm_tokens` | PK; UNIQUE (`token`); `idx_fcm_tokens_user_active(user_id, is_active)` |
 | `notification_deliveries` | PK; partial UNIQUE (`notification_id`, `fcm_token_id`, `attempt_number`) where token non-null; partial UNIQUE (`notification_id`) where token null; `idx_delivery_status(push_status, updated_at)` |
 | `system_logs` | PK; `idx_system_logs_created(created_at DESC)`; `idx_system_logs_event(event_type, created_at DESC)`; `idx_system_logs_actor(actor_user_id, created_at DESC)`; `idx_system_logs_entity(entity_type, entity_id, created_at DESC)` |
 
-The unread dedupe indexes use (`recipient_user_id`, `notification_type`, `related_entity_type`, `related_entity_id`) for related notifications and (`recipient_user_id`, `notification_type`) for notification rows without a related entity, both WHERE `is_read = false`.
+Any event duplicate suppression is scoped to the same recipient and specific source event/occurrence. Do not suppress distinct events merely because an earlier notification of that type is unread. Each recipient's read state is independent; there is no global read/deduplication flag.
 
 ### 7.1 Updated-at triggers
 
@@ -726,15 +760,15 @@ One shared `set_updated_at()` BEFORE UPDATE trigger function sets `NEW.updated_a
 - `fcm_tokens`; and
 - `notification_deliveries`.
 
-Generated/stored calculation columns use PostgreSQL generation expressions, not triggers. `system_logs` and operational event/history rows are append-only or immutable except through the approved transaction contracts.
+Generated/stored calculation columns use PostgreSQL generation expressions, not triggers. `system_logs` and operational event/history rows are append-only or immutable except through the defined transaction contracts.
 
 ## 8. RLS and access design
 
 ### 8.1 Ownership boundary
 
 - Enable RLS on every `public` table in Section 4.
-- Do not create general `authenticated` SELECT/INSERT/UPDATE/DELETE policies.
-- Flutter may use Supabase Auth for sign-in/session issuance, but it does not query `public` tables.
+- Do not create general `authenticated` SELECT/INSERT/UPDATE/DELETE policies. Add only the narrow recipient-only notification SELECT policy described below.
+- Flutter uses Supabase Auth for sign-in/session issuance, Supabase Realtime for eligible foreground notification events and FCM for background notification delivery. All ordinary application-table CRUD uses Node.
 - Node validates the Supabase JWT, loads `user_profiles`, enforces role/status, and performs database operations through Repos using protected server credentials.
 - FastAPI receives versioned DTOs from Node and has no Supabase URL, key, client, Repo or table model.
 - FCM, weather and calendar credentials remain outside PostgreSQL.
@@ -748,9 +782,23 @@ Generated/stored calculation columns use PostgreSQL generation expressions, not 
 | Context caches | Enabled | None | Node `ContextService` through Repos |
 | Sales history, prediction and ML metadata | Enabled | None | Node prediction/model Services; FastAPI returns DTOs only |
 | Production, POS, donation and waste | Enabled | None | Node transactional Services/RPCs |
-| Notifications, tokens, preferences and deliveries | Enabled | None | Node Notification Service/Repos; FCM adapter never accesses tables directly |
-| `system_logs` | Enabled | None | Node append-only audit service and approved RPCs |
+| `notifications` | Enabled | Authenticated recipient-only SELECT for eligible foreground Realtime events | Node NotificationService/NotificationRepo, including mark-read |
+| Tokens, preferences and deliveries | Enabled | None | Node NotificationService/Repos; FCM adapter never accesses tables directly |
+| `system_logs` | Enabled | None | Node append-only audit service and defined RPCs |
 | `auth.users` | Supabase-managed | Supabase-managed | Supabase Auth only |
+
+Proposed notification policy shape (not deployed):
+
+```sql
+CREATE POLICY recipient_notification_realtime
+ON public.notifications FOR SELECT TO authenticated
+USING (
+  recipient_user_id = (SELECT auth.uid())
+  AND private.realtime_notification_allowed(notification_type)
+);
+```
+
+The narrowly granted read-only helper reads only the current `auth.uid()` profile and personal type preference, requires an ACTIVE profile and enabled in-app preference, takes no user ID argument, and returns only eligibility. If implemented as SECURITY DEFINER it uses a fixed safe search path and restricted ownership/EXECUTE grants; it does not grant general SELECT on profiles/preferences. No authenticated INSERT/UPDATE/DELETE policy is added. Node rechecks recipient ownership for read/history and mark-read APIs. Realtime publication/subscription and role/status/preference change handling must prove recipient isolation; do not replace this report-selected foreground path with Node polling/SSE/WebSocket relays.
 
 ### 8.3 RPC permissions
 
@@ -760,27 +808,39 @@ The `sales_by_timeslot` view uses security-invoker behaviour and remains accessi
 
 ## 9. Transaction and consistency rules
 
+### 9.0 Joint recommendation and confirmation
+
+`RecommendationEngine` read stored predictions through `DailyPredictionRepo`, recipes through `RecipeRepo`, date-valid batches through `InventoryRepo` and outstanding confirmations through `ProductionDecisionRepo`. Recommendation generation never generates predictions.
+
+1. Build one temporary ingredient balance for the production date from valid batches.
+2. Subtract all confirmed, unprocessed decisions. If these commitments exceed any ingredient balance, report the shortages and block additional confirmation/simulation until resolved.
+3. Visit remaining unconfirmed active categories in ascending `display_order`. For each category, compute `max_producible = min(floor(remaining_grams[ingredient] / grams_per_unit))` over its recipe ingredients; missing recipe or inactive/invalid ingredients block recommendation.
+4. Recommend `min(predicted_units_sold, max_producible)` and subtract its ingredient requirements before processing the next category. There is no automatic buffer above predicted sales.
+5. On confirmation/revision, lock the relevant decision/ingredient scope and validate the combined outstanding plan. Replace the prior quantity on revision and recalculate affected recommendations. Confirmation changes no stored inventory; a feasible manager override requires a reason.
+
+For example, 1,000 g flour with two 100 g/unit categories and predictions of 8 each yields 8 then 2 in display order, not 8 plus 8. If category one already has 6 confirmed units, reserve 600 g first and recommend at most 4 for category two. Once category one is processed, its original 600 g is already deducted and is not reserved again.
+
 ### 9.1 POS completion/FIFO RPC
 
 The canonical Node-owned PostgreSQL transaction/RPC is `complete_pos_simulation`. The name specifies a design contract, not an implemented function.
 
 One call covers the selected business date and all included categories so the simulation is all-or-nothing:
 
-1. Node authenticates the Bakery Manager and supplies a unique `operation_id`, target date, calculated sale events and approved inputs.
+1. Node validates JWT and ACTIVE `BAKERY_MANAGER` profile, uses the current bakery-local date by default, and supplies a unique `operation_id`, target date and stored decision references. Client actor, role, feasibility, production quantity override or claimed prediction values are not trusted.
 2. The RPC validates the active manager profile, stored `daily_predictions`, confirmed `production_decisions`, matching category/date values and absence of an existing production/result for those decisions.
 3. It locks the relevant decisions, inventory snapshots and usable batches using row locks.
-4. It recalculates required ingredient grams from canonical recipes and selected production quantities.
-5. It rejects expired/inactive batches and validates enough usable stock before writing anything.
-6. It deducts batches exactly once in `expiry_date`, `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with the shared `operation_id` and decision ID.
+4. It recalculates combined ingredient requirements of all outstanding decisions, including commitments outside the requested subset, and validates the selected confirmed quantities; processed decisions are excluded.
+5. It rejects expired/inactive/unreceived batches and validates enough usable stock before writing anything. Inventory locks use a consistent ingredient order to prevent concurrent overspending.
+6. It deducts selected decisions exactly once in ascending `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with shared `operation_id` and decision ID. Only then does sales processing apply time-slot/stochastic variation around the stored contextualised prediction, without multiplying weather/holiday/season effects again.
 7. It inserts one `daily_production` per decision and one `daily_results` per production, initializing remaining unallocated leftover to generated leftover.
 8. It inserts all `sales_transactions` under their `daily_result_id` and verifies each result's `units_sold` and revenue against those transactions.
 9. It inserts exactly one validated `daily_sales_records` row per result with `data_origin = 'SIMULATION_GENERATED'` and the matching `source_daily_result_id`.
 10. It writes success audit events and verifies `inventory.quantity_grams` equals the total usable batch remainder.
 11. It commits once. Any validation, deduction, insert, calculation or audit failure raises an exception and PostgreSQL rolls back inventory batches, inventory snapshots, logs, production, sales, results and generated sales history together.
 
-The RPC performs no weather, calendar, FCM or FastAPI call. Context is traceability-only during POS simulation; the stored prediction is not multiplied again.
+`PosSimulationService` and `TransactionRecordingService` own this operation through `SimulationCommitRepo`. A Node-owned PostgreSQL transaction with a single connection is the primary orchestration contract; an equivalent RPC is permitted only if it preserves the same validation/locking/deduction-before-sales sequence. External-service calls are outside the transaction. Notification dispatch occurs after successful commit and cannot partially commit an operational result.
 
-`operation_id` provides idempotency/reversal grouping without a `SimulationRun` table. An authorized replacement/re-simulation is a separate Node-owned transaction that locks the original `operation_id` movements, creates opposite `PRODUCTION_REVERSAL` log entries against the exact batches, removes/replaces permitted dependent operational rows, and commits the reversal/replacement atomically. Historical deletion remains restricted outside this controlled operation.
+Idempotency is enforced by locking decisions and the unique decision → production → result and simulation-history relationships, not by an unconstrained UUID alone. A duplicate request returns `409 ALREADY_SIMULATED` with a stored-result link, without further inventory or history mutation. No partial second date-level simulation is added. Re-simulation is **future work**: the current plan rejects replacement of completed operational results. Any later proposal must specify atomic exact-original-batch reversal, expiry handling, price/cost snapshots, linked sales/history/allocation/model-input retention and idempotency; generic correction batches or deleting history are not recovery mechanisms. `PRODUCTION_REVERSAL` is a reserved controlled value, not a current implemented endpoint.
 
 ### 9.2 Leftover allocation RPC
 
@@ -790,15 +850,17 @@ Donation/waste mutation uses a Node-only `allocate_leftover` transaction/RPC:
 2. Lock the target `daily_results` row.
 3. Recalculate confirmed donation total and waste total from child rows.
 4. Reject when current donation + current waste + requested quantity exceeds `leftover`.
-5. Insert either one donation or one waste row—never both implicitly.
+5. Validate an active charity for donation or a non-blank disposal reason for waste, then insert the manager-confirmed allocation.
 6. Set `remaining_unallocated_leftover = leftover - donation total - waste total`.
 7. Write the audit event and commit together.
 
 The recommendation operation performs no write. A manager must confirm each allocation.
 
+`LeftoverManagementService.updateStatus` through `DonationRepo` plans `PATCH /api/donations/:id/status`, manager-only, with audit and recipient donation-status events. `PENDING → COLLECTED → COMPLETED` maps old RECORDED → PICKED_UP → DELIVERED terminology to the report's concepts. `CANCELLED` is a recognized report status; whether and when cancellation releases an allocation for reallocation, and which transitions are reversible, are genuinely unspecified. That policy must be resolved before implementing cancellation; do not silently release/reuse units. For every accepted operation maintain `leftover = donated + wasted + remaining_unallocated`, transactionally.
+
 ### 9.3 Model activation/restoration transaction
 
-Node's model-management transaction locks all versions for a category, verifies a persisted valid evaluation for the selected candidate/inactive version, changes the current active version to `INACTIVE`, changes the selected row to `ACTIVE`, records administrator/time, and commits atomically. The partial unique active-version index prevents concurrent double activation. FastAPI never performs activation or database persistence.
+Node's `ModelManagementService` transaction through `MlModelVersionRepo` and `ModelEvaluationRepo` locks the category's versions, validates an active administrator, artifact validity and reviewed evaluations. A candidate cannot replace the active version if its MAE is greater on the same chronologically later untouched holdout (NFR-ACC-05); incomparable, missing or failed evaluation blocks replacement. On success deactivate old/activate selected version, record actor/time and audit, then commit together. A first activation without a prior model still requires a valid reviewed evaluation. Restoration is a separate explicit operation with validity/evaluation review. On failure retain current active version. The partial unique index prevents concurrent double activation. FastAPI never performs activation or persistence.
 
 ### 9.4 Settings and audit transactions
 
@@ -806,16 +868,30 @@ Node's model-management transaction locks all versions for a category, verifies 
 - Profile role/status changes are administrator-only, preserve the final active administrator, and are audited transactionally.
 - Master records referenced by history are deactivated; ordinary CRUD cannot hard-delete them.
 
+Planned account/administration boundary (§4.8 Table 4.27):
+
+| Functions/endpoints | Service and Repo | Permission/UI responsibility |
+|---|---|---|
+| `GET/PATCH /api/profile` | `ProfileService`, `UserProfileRepo` | Both roles, own profile only; ProfileView cannot submit role/status changes |
+| `GET/POST /api/admin/users`, `PATCH /api/admin/users/:id` | `UserAdministrationService`, `UserProfileRepo`, `AuthAdminAdapter` adapter | System Administrator only; UserAdministrationView assigns exactly one role and ACTIVE/INACTIVE status; preserve final active administrator transactionally |
+| `GET/PATCH /api/admin/settings` | `SettingsService`, `BakerySettingsRepo`, `SystemSettingsRepo` | Administrator SettingsView validates non-secret settings and singleton bakery parameters |
+| `GET /api/admin/audit` | `AuditService`, `SystemLogRepo` | Administrator AuditView filters/paginates append-only history |
+| Catalogue/batches/recipes/partners management | `InventoryService`, `RecipeService`, `CharityPartnerService`; corresponding Repos | Administrator only; manager has permitted reads, no master-data mutation |
+| Prediction generation, production confirmation, simulation, leftover allocation/status | Respective operational Services/Repos | Bakery Manager only; administrator does not inherit these actions |
+| Reports/dashboard and own notification/preferences/token actions | `ReportService`/`ReportRepo`, `NotificationService` and notification Repos | Both roles within permitted data/recipient scope |
+
+JWT validation and ACTIVE profile loading precede permission checks. Actor identity always comes from the verified token. Sensitive administrative operations revalidate the profile inside their transaction; concurrency tests protect the final active administrator. Provider secrets are configured outside database settings/client code; authorized UI shows only non-secret connection settings and health, never credentials.
+
 ### 9.5 Notification persistence and delivery transitions
 
-For each intended recipient, Node inserts one `notifications` row and evaluates that user's type-specific preference:
+For each relevant intended recipient, Node records the event in `notifications` and evaluates the recipient's active profile and type-specific preferences. Foreground visibility requires enabled in-app preference and recipient isolation. Push additionally requires explicit push enablement, OS permission and a valid active token owned by that recipient:
 
-- when push is disabled or no active token exists, insert one tokenless `notification_deliveries` row with `SKIPPED`;
+- when push is disabled, the profile is inactive or no eligible token exists, insert one tokenless `notification_deliveries` row with `SKIPPED`;
 - otherwise insert one `PENDING` delivery for every active token belonging to that recipient;
 - the FCM adapter changes `PENDING` to `SUBMITTED` or `FAILED`; and
 - a supported provider callback may change `SUBMITTED` to `DELIVERED` or `FAILED`.
 
-`DELIVERED`, `FAILED` and `SKIPPED` are terminal for that row. A later explicit retry inserts a new delivery row for the same notification/token with the next `attempt_number`, retaining earlier attempt evidence. Node verifies that every non-null token belongs to the notification recipient. The foreground API applies `in_app_enabled`; notification rows remain retained for audit even when not displayed.
+`SUBMITTED` means provider acceptance, not confirmed delivery. Where delivery confirmation is unsupported, keep SUBMITTED. `DELIVERED`, `FAILED` and `SKIPPED` are terminal for that row. A later explicit retry inserts a new attempt row, retaining evidence. Node verifies recipient/token ownership at dispatch and suppresses inactive recipients/tokens. Realtime policy and foreground API both apply recipient and `in_app_enabled` rules. Include low stock, soon-to-expire/expired batches, low confidence, lost sales, surplus, donation status and model/external/system failure events. Refresh-derived pending-action indicators initiate no prediction, training, confirmation, simulation or allocation, and no timer sends 06:00/18:00 reminders.
 
 ## 10. DTO, computed and file-artifact exclusions
 
@@ -826,18 +902,18 @@ The following are not tables:
 | `DailyContext` | Request-time DTO composed from weather/calendar records |
 | `ProductionRecommendation` | Computed service DTO; confirmed choice persists as `production_decisions` |
 | `PredictionCategoryInput`, `PredictionRequest`, `PredictionResult`, `PredictionResponse` | Node/FastAPI transport DTOs |
-| `TrainingObservation`, `TrainingRequest`, `TrainingResult` | Node/FastAPI transport DTOs; persisted history remains `daily_sales_records` |
-| `EvaluationRequest`, `EvaluationResult`, `ModelMetrics` | Transport/computed DTOs; approved summaries persist in `model_evaluations` |
+| `TrainingObservation`, `TrainingRequest`, `TrainingResponse` | Node/FastAPI transport DTOs; persisted history remains `daily_sales_records` |
+| `EvaluationRequest`, `EvaluationResponse`, `ModelMetrics` | Transport/computed DTOs; defined summaries persist in `model_evaluations` |
 | Weekly reports/dashboard summaries | Query/service output DTOs generated from source tables |
 | PDF/CSV payload | Export adapter output |
-| `CategoryPredictor`, Random Forest and Linear Regression artifacts | FastAPI-managed files; only `artifact_key` and metadata persist |
+| `RandomForestModel` and `LinearRegressionModel` artifacts | FastAPI-managed files; only `artifact_key` and metadata persist |
 | Cold-start output | Prediction DTO/result stored only as `daily_predictions` |
 | FIFO calculation/deduction response | RPC/service result; movements persist in `inventory_log` |
 | `SimulationRun` | Excluded; `operation_id` is only an idempotency/grouping value |
 | `LeftoverRecord` | Excluded; leftover state belongs to `daily_results` |
 | `sales_by_timeslot` | Computed PostgreSQL view, not a base table |
 
-Generated/cached columns are also not separate entities: subtotal, estimated demand, leftover, remaining allocation, leftover rate, error units, revenue, ingredient cost and gross profit.
+Generated/cached columns are also not separate entities: subtotal, estimated demand, leftover, remaining allocation, leftover rate, sales prediction error, revenue, ingredient cost and gross profit.
 
 ## 11. Final Mermaid ERD
 
@@ -988,6 +1064,8 @@ erDiagram
         uuid model_version_id FK
         date holdout_start
         date holdout_end
+        jsonb holdout_manifest
+        text holdout_fingerprint
         text_array data_origins
         text evaluation_label
         numeric mae
@@ -1066,7 +1144,7 @@ erDiagram
         int leftover
         int remaining_unallocated_leftover
         numeric leftover_rate_pct
-        int error_units
+        int sales_prediction_error
         text notes
         numeric revenue
         numeric ingredient_cost
@@ -1159,6 +1237,7 @@ erDiagram
         timestamptz attempted_at
         timestamptz delivered_at
         text failure_reason
+        text skip_reason
         timestamptz created_at
         timestamptz updated_at
     }
@@ -1227,27 +1306,32 @@ erDiagram
 
 ## 12. Decision-resolution change report
 
-| Verification decision/gap | Final approved resolution |
+| Reconciled design concern | Current resolution and report reference |
 |---|---|
 | 1. User profile, role, permission and status storage | Added `user_profiles` keyed one-to-zero/one from `auth.users`; two role values and active/inactive status. Credentials remain exclusively in Supabase Auth. Role-based permissions are enforced by Node from the role value; no extra permission tables are required for the two-role scope. |
 | 2. `system_settings` definition | Added validated JSONB key/value settings with explicit data type, key format, description, updater and update time. The database validates JSON shape against the declared type. |
-| 3. External-service configuration and secrets | No secrets table. Approved non-secret endpoints, locations, feature flags and thresholds may use `system_settings`; credentials use protected Node environment variables or a secret manager. |
+| 3. External-service configuration and secrets | No secrets table. Defined non-secret endpoints, locations, feature flags and thresholds may use `system_settings`; credentials use protected Node environment variables or a secret manager. |
 | 4. Notification targeting, preferences and delivery persistence | Added recipient to `notifications`, composite `notification_preferences`, per-user `fcm_tokens`, and normalized per-device `notification_deliveries` with the five required statuses and provider/timestamp/failure details. |
 | 5. Sales source-reference semantics | Replaced the overloaded UUID with `source_daily_result_id` and `external_source_reference`; added origin-specific CHECKs, partial uniqueness and matching date/category composite FK. |
 | 6. Prediction/calendar reproducibility | Added `prediction_calendar_events` as the exact many-to-many junction. |
-| 7. Node/Supabase transaction mechanism | Approved a Node-only PostgreSQL RPC contract, `complete_pos_simulation`, with service-role-only execution and one database transaction. |
-| 8. Inventory reversal traceability | Added non-entity `operation_id` grouping and decision reference to `inventory_log`; original failures roll back, while an authorized later replacement uses an exact-batch reversal transaction. No `SimulationRun` table is added. |
-| 9. Error and leftover-rate semantics | `error_units = estimated_demand - predicted_units_sold`; ambiguous `error_pct` removed; `waste_rate_pct` renamed to `leftover_rate_pct` and generated only when produced > 0. |
-| 10. Allowed values and ranges | Approved the controlled values in Section 3, non-blank free text for disposal/location descriptions, and explicit quantity/date/confidence/evaluation checks. |
+| 7. Node/Supabase transaction mechanism | One Node-owned PostgreSQL transaction/RPC commits FIFO, batch/snapshot/movement updates, production, sales, result and generated history together (§4.5.4); `SimulationCommitRepo` coordinates it. |
+| 8. Inventory reversal traceability | `operation_id` groups movements; failed simulation rolls back. Re-simulation is future work pending an exact-batch/linked-history atomic policy; no `SimulationRun` table (§4.5.2). |
+| 9. Error and leftover-rate semantics | `sales_prediction_error = units_sold - predicted_units_sold`; signed values allowed. Leftover rate is not discarded-waste rate; zero denominator is Not Applicable (§§4.5.3–4.5.4, 4.7). |
+| 10. Allowed values and ranges | Defined the controlled values in Section 3, non-blank free text for disposal/location descriptions, and explicit quantity/date/confidence/evaluation checks. |
 | 11. Historical deletion behaviour | Replaced historical CASCADE paths with `ON DELETE RESTRICT`; added/retained `is_active` or account status for users, categories, ingredients, partners and tokens. |
 | 12. Audit structure | Expanded `system_logs` to actor, event, entity, outcome, severity, payload and time with indexes and append-only Node access. |
 | 13. Computed/cache consistency | Made row-local expressions generated/stored; the POS RPC verifies cross-table sales/revenue and maintains allocation/inventory caches transactionally. |
 | Missing category/ingredient/restock fields | Added category description, ingredient active status and inventory-batch unit-cost snapshot. |
 | Missing operational FKs | Added and constrained prediction → decision → production → result, result → sales, and result → simulation-generated history relationships with at-most-one rules. |
-| One active model | Added the partial unique active-version index and atomic administrator activation/restoration transaction. |
+| One active model | Partial unique index; separate training/evaluation/explicit activation/restoration; reject higher MAE on identical untouched chronological holdout (NFR-ACC-05). |
 | FastAPI database boundary | Retained DTO-only FastAPI input/output; Node alone persists Supabase data. |
+| Nullable cold start and model confidence | MODEL numeric tree-agreement confidence; COLD_START null with low-confidence heuristic label; 30 distinct selected daily observations and valid active RF gate (§§4.5.3–4.5.4, 4.9.2, NFR-ACC-08). |
+| Joint ingredient feasibility and FIFO | Reserve outstanding decisions, allocate unconfirmed categories in display order, validate revisions jointly; consume valid batches by receipt date then ID (§4.9.3). |
+| Foreground notifications | Narrow authenticated recipient-only Realtime SELECT policy; all writes/read-state changes use Node (§§4.2.4, 4.8). |
+| Cost and export reproducibility | Actual FIFO batch unit-cost snapshots and sale unit-price snapshots; consistent manually requested UI/CSV/PDF calculations (§4.7). |
+| Donation statuses | PENDING/COLLECTED/COMPLETED/CANCELLED; cancellation/reallocation semantics remain open (§§1.4.2, 4.5). |
 
-All database decisions needed to draw Chapter 4.5.2 are resolved. SQL function bodies, migration ordering, generated TypeScript types and performance tuning remain later implementation work and do not change this ER design.
+The 31 July 2026 design date records a historical planning snapshot, not approval over the latest DOCX. Reconciliation began 11 October 2026; final documentation review was 12 October 2026. Cancellation/reallocation policy is still a material open decision; executable migrations, transaction bodies, generated types and measured verification remain future implementation work. This document supplies a design, not completed implementation/testing chapters.
 
 ## 13. Final classification
 

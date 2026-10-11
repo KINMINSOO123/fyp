@@ -1,916 +1,169 @@
-# Module 1: Node.js Middleware + External API Adapters — Detailed Plan
+# Module 1: Middleware, Access and Administration — Detailed Plan
 
-**Build Order:** 2nd (depends on Module 0: Data Foundation)
-**Status:** Detailed plan — ready for implementation
-**Architecture:** View → Controller → Service → Repo/External Adapter (see `../ARCHITECTURE.md`)
+**Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.2, 4.5 and 4.8–4.9. **Implementation status:** proposed design only; the repository contains a Flutter starter and planning documents. Names, endpoint contracts, SQL and TypeScript below describe future work, not existing files or verified functionality. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) is for navigation; the DOCX controls.
 
-> See `MODULE.md` in this folder for the high-level plan (sub-modules, routes, auth strategy, file structure).
-> This README documents the concrete artifacts to build: function signatures, repo/service/controller logic, dependencies, error handling.
+## 1. Architecture and dependency boundaries
 
-## Revision baseline (authoritative)
+Module 0 supplies the current relational catalogue, controlled values and field mappings in [database_canonical_design.md](../../database_canonical_design.md). Modules 2–5 supply domain behavior; Module 6 supplies pending-action integration and verification. This technical package supports all eight functional modules and directly owns User and Access Management, Alerts and Notifications infrastructure, and System Administration.
 
-- Node.js/Express owns all Supabase PostgreSQL access through TypeScript `Repo` classes derived from `BaseRepo<T>`.
-- Add class-based `PredictionOrchestrationService`, `ModelManagementService` and `FastApiMlClient`. Only the adapter communicates with thin FastAPI route modules.
-- Model management is System-Administrator-only: training creates candidates; chronological, origin-labelled evaluation precedes activation; a previous valid version can be restored.
-- Express routers are modules, not Controller classes. Controller classes call Services; Services call Repos or external adapters.
-- Preserve user/access management, settings, audit logs, notifications, device tokens and FCM. Foreground Flutter clients use a Node.js boundary rather than subscribing directly to PostgreSQL changes.
-- Module 4 uses `PosSimulationController`/`PosSimulationService`; Module 5 uses manager-confirmed leftover allocation and never auto-creates donations.
-
-Any conflicting function-style or direct-realtime illustrative snippet below is superseded by this baseline and must be translated into the named classes before implementation.
-
----
-
-## 1. Dependencies (from Module 0)
-
-| Artifact | Used For |
-|---|---|
-| `backend/shared/types.ts` | Zod schemas for request/response validation (Model layer) |
-| `backend/shared/index.ts` | Barrel export of types |
-| `backend/supabase/schema/001_initial.sql` | Tables this module reads/writes |
-| `backend/supabase/seed/constants.json` | Weather/holiday multipliers, bakery coords |
-
----
-
-## 2. Artifacts to Build
-
-> Layered per `../ARCHITECTURE.md`. TypeScript Repos are the only PostgreSQL callers. Services call Repos or adapters. Controller classes are thin HTTP handlers; Express router files only register routes.
-
-| # | Path | Layer | Purpose |
-|---|---|---|---|
-| 1 | `backend/package.json` | — | Dependencies + scripts |
-| 2 | `backend/tsconfig.json` | — | TypeScript config |
-| 3 | `backend/.env.example` | — | Env var template |
-| 4 | `backend/src/app.ts` | — | Express app setup |
-| 5 | `backend/src/server.ts` | — | Entry point |
-| 6 | `backend/src/config/env.ts` | — | Zod-validated env config |
-| 7 | `backend/src/config/supabase.ts` | — | Supabase client singleton (used by repos only) |
-| 8 | `backend/src/middleware/auth.ts` | — | Supabase JWT verification |
-| 9 | `backend/src/middleware/errorHandler.ts` | — | Centralized error handler |
-| 10 | `backend/src/middleware/validateRequest.ts` | — | Zod request validation |
-| 11 | `backend/src/repositories/baseRepo.ts` | Repo | Generic CRUD base class |
-| 12 | `backend/src/repositories/bakerySettingsRepo.ts` | Repo | bakery_settings table |
-| 13 | `backend/src/repositories/weatherRepo.ts` | Repo | weather_records table |
-| 14 | `backend/src/repositories/calendarRepo.ts` | Repo | calendar_events table |
-| 15 | `backend/src/repositories/systemLogRepo.ts` | Repo | system_logs table |
-| 16 | `backend/src/adapters/openWeatherMapClient.ts` | Adapter | Raw OpenWeatherMap HTTP wrapper |
-| 17 | `backend/src/adapters/nagerDateClient.ts` | Adapter | Raw Nager.Date HTTP wrapper |
-| 18 | `backend/src/adapters/conditionMapper.ts` | Adapter | Weather condition mapping (pure function) |
-| 19 | `backend/src/services/weatherService.ts` | Service | Weather logic + caching (calls weatherRepo + openWeatherMapClient) |
-| 20 | `backend/src/services/calendarService.ts` | Service | Holiday logic + caching (calls calendarRepo + nagerDateClient) |
-| 21 | `backend/src/services/contextService.ts` | Service | Parallel orchestrator (calls weather + calendar services) |
-| 21a | `backend/src/adapters/fastApiMlClient.ts` | External Adapter | Typed prediction/training/evaluation HTTP boundary to FastAPI |
-| 21b | `backend/src/services/predictionOrchestrationService.ts` | Service | Assemble validated `DailySalesRecord` history/context and persist predictions |
-| 21c | `backend/src/services/modelManagementService.ts` | Service | Administrator candidate training/evaluation/activation/restoration |
-| 21d | `backend/src/repositories/dailySalesRecordRepo.ts` | Repo | Validated historical units sold by `DataOrigin` |
-| 21e | `backend/src/repositories/modelVersionRepo.ts` / `modelEvaluationRepo.ts` | Repo | Model lifecycle and origin-labelled evaluation persistence |
-| 22 | `backend/src/controllers/*.ts` | Controller | Constructor-injected Controller classes; no `Router` instances |
-| 22a | `backend/src/routes/*.ts` | Module | Thin Express registration mapping routes to Controller methods |
-| 23 | `backend/src/utils/logger.ts` | — | Logging utility |
-| 24 | `backend/src/utils/retryWithBackoff.ts` | — | Retry logic for external APIs |
-| 25 | `backend/src/utils/apiError.ts` | — | Custom error class |
-
----
-
-## 3. Dependencies (`package.json`)
-
-```json
-{
-  "name": "bakery-backend",
-  "version": "0.1.0",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
-  },
-  "dependencies": {
-    "express": "^4.19.0",
-    "@supabase/supabase-js": "^2.42.0",
-    "zod": "^3.23.0",
-    "dotenv": "^16.4.0",
-    "node-fetch": "^3.3.0",
-    "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.4.0",
-    "tsx": "^4.7.0",
-    "@types/express": "^4.17.0",
-    "@types/cors": "^2.8.0",
-    "@types/morgan": "^1.9.0",
-    "eslint": "^8.57.0",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0"
-  }
-}
+```mermaid
+flowchart LR
+    View[Flutter View] -->|JWT business request| Controller[TypeScript Controller]
+    Controller --> Service[TypeScript Service]
+    Service --> Repo[TypeScript Repo]
+    Repo --> DB[(Supabase PostgreSQL)]
+    Service --> Adapter[External Adapter]
+    Service --> MlClient[FastApiMlClient]
+    MlClient --> Route[Thin FastAPI route module]
+    Route --> Python[Python ML Service]
+    View --> Auth[Supabase Authentication]
+    DB -->|recipient-scoped Realtime notification event| View
+    Adapter -->|eligible push| FCM[Firebase Cloud Messaging]
+    FCM --> View
 ```
 
----
+Express route modules bind HTTP verbs and paths to Controller methods; they are not Controller classes. Controllers validate transport input and delegate to Services. Services enforce domain permissions and invariants; Repos provide domain queries and transactional persistence. A generic Repo base must not expose unrestricted CRUD for audit, financial or operational records. Node supplies validated data to Python through `FastApiMlClient`; Python has no database credentials, Supabase client or application-table Repo. Flutter's explicit platform exceptions are Supabase Authentication, authenticated recipient-only Realtime notification reads and FCM; ordinary application data CRUD uses Node.
 
-## 4. Config Layer
+## 2. Identity, role and profile contracts
 
-### 4.1 `src/config/env.ts`
-Zod-validated environment variables — fails fast on startup if misconfigured.
+The request pipeline is: validate Bearer JWT signature/issuer/audience/expiry, obtain the authenticated provider user ID, load `user_profiles`, require `account_status = ACTIVE`, enforce endpoint permission, validate DTO, then call the Service. A missing or inactive profile cannot use a valid JWT to bypass authorization. Role/status changes apply to subsequent requests; do not retain stale authorization in long-lived client state.
 
-```typescript
-import { z } from 'zod';
-
-const EnvSchema = z.object({
-  PORT: z.coerce.number().default(3000),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_SERVICE_KEY: z.string().min(1),
-  SUPABASE_JWT_SECRET: z.string().min(1),
-
-  OPENWEATHERMAP_API_KEY: z.string().min(1),
-  BAKERY_LAT: z.coerce.number(),
-  BAKERY_LON: z.coerce.number(),
-
-  NAGER_DATE_BASE_URL: z.string().url().default('https://date.nager.at'),
-
-  ML_SERVER_URL: z.string().url().default('http://localhost:8000'),
-});
-
-export type Env = z.infer<typeof EnvSchema>;
-
-export const env = EnvSchema.parse(process.env);
+```ts
+// Proposed domain/transport sketch; authentication creates ActorContext.
+type UserRole = 'BAKERY_MANAGER' | 'SYSTEM_ADMINISTRATOR';
+type AccountStatus = 'ACTIVE' | 'INACTIVE';
+type ActorContext = Readonly<{ userId: string; role: UserRole }>;
+type ProfilePatch = { fullName?: string }; // maps to user_profiles.full_name
+type AdminUserPatch = {
+  fullName?: string;
+  role?: UserRole;
+  accountStatus?: AccountStatus;
+};
 ```
 
-### 4.2 `src/config/supabase.ts`
-Supabase client singleton using service-role key (bypasses RLS for backend operations).
+Each user has exactly one stored role, not a role array or email-derived role. Node rejects client actor IDs, role claims, `confirmedBy`, recipient ownership assertions and asserted feasibility as authority. `ProfileService` allows only own-profile fields and cannot change role/status. Passwords and provider identity changes remain under Supabase Authentication; `AuthAdminAdapter` coordinates authorized provider operations and returns no provider secrets. A PostgreSQL transaction cannot atomically commit an external provider operation: provider-linked account updates require explicit completion/failure handling, and newly provisioned accounts stay inactive until a valid profile exists.
 
-```typescript
-import { createClient } from '@supabase/supabase-js';
-import { env } from './env';
+| Table 4.27 function | Bakery Manager | System Administrator |
+|---|---|---|
+| Own profile, personal notifications, permitted reports/dashboard | Allowed | Allowed |
+| Generate prediction; review/confirm production; run POS simulation | Allowed | Rejected |
+| Allocate leftovers; update donation status | Allowed | Rejected |
+| Manage ingredients, batches, categories, recipes and charity partners | Rejected | Allowed |
+| Train/evaluate/activate/restore models | Rejected | Allowed |
+| Manage users/roles, approved settings, audit review | Rejected | Allowed |
 
-export const supabase = createClient(
-  env.SUPABASE_URL,
-  env.SUPABASE_SERVICE_KEY,
-  { auth: { persistSession: false } }
+`UserAdministrationService` validates role/status changes inside a transaction that serializes changes affecting active administrators. Demoting or deactivating the final active administrator is rejected, including concurrent requests that would jointly remove all administrators. Referenced accounts are deactivated, not deleted. `UserProfileRepo` performs the locked role/status update with the audit write; provider credentials are never stored in `user_profiles`.
+
+## 3. Concrete Controllers, Services, Repos and Views
+
+| Endpoints | Planned classes | Flutter responsibility |
+|---|---|---|
+| `GET/PATCH /api/profile` | `ProfileController -> ProfileService -> UserProfileRepo`; `AuthAdminAdapter` for provider identity | `ProfileView`: permitted personal details, validation and retry |
+| `GET/POST /api/admin/users`; `PATCH /api/admin/users/:id` | `UserAdministrationController -> UserAdministrationService -> UserProfileRepo/AuthAdminAdapter` | `UserAdministrationView`: accounts, role/status forms, confirmation and final-admin error |
+| `GET/PATCH /api/admin/settings` | `SettingsController -> SettingsService -> BakerySettingsRepo/SystemSettingsRepo` | `SettingsView`: typed allowlisted settings and previous values |
+| `GET /api/admin/service-status` | `SettingsController -> SettingsService -> OpenWeatherMapClient/NagerDateClient/FcmPushAdapter` | `ServiceStatusView`: nonsecret connection state and manual retry |
+| `GET /api/admin/audit` | `AuditController -> AuditService -> SystemLogRepo` | `AuditView`: read-only date/category/user/outcome filters and pagination |
+| `GET /api/notifications`; `PATCH /api/notifications/:id/read` | `NotificationController -> NotificationService -> NotificationRepo` | `NotificationsView`: own notifications and Node mark-read request |
+| `GET/PATCH /api/notification-preferences`; `POST/DELETE /api/fcm-tokens` | `NotificationController -> NotificationService -> NotificationPreferenceRepo/FcmTokenRepo` | `NotificationPreferencesView`: per-type choices and device token lifecycle |
+| `GET /api/pending-actions?date=YYYY-MM-DD` | `PendingActionController -> PendingActionService -> DailyPredictionRepo/ProductionDecisionRepo/DailyResultRepo/DonationRepo/WasteRecordRepo` | `ManagerDashboardView` / `AdministratorDashboardView`: pending indicators on open/refresh and permitted actions |
+
+The canonical [logical view](../../logical_view_canonical_design.md) gives domain Repo naming and associations. Read models may compose multiple Repos without creating new tables. One route module may register several Controller methods; a route path does not imply a new class or base table.
+
+### Settings and audit details
+
+`bakery_settings` has one singleton row for bakery identity, location, timezone and operating context. `system_settings` holds validated allowlisted operational configuration with type/range rules and updater traceability. Settings include cold-start base/factors, inventory thresholds, initially 75% low-confidence threshold, simulation periods, leftover rules and notification thresholds. The report's minimum of 30 distinct validated days remains enforced; there is no numerical cold-start-confidence setting, automatic production buffer or scheduled daily-reminder setting in current scope.
+
+External-service settings store nonsecret endpoints, location, enabled/configuration status and protected credential references. Keys, service-role credentials and FCM credentials stay in server environment/secret storage, outside settings payloads, client code, logs and database setting values. Validate supported external destinations, dates, units and ranges before saving; a failed connection/configuration change retains the existing valid configuration. The application serves one bakery; no branch management is introduced.
+
+`AuditService` records actor, action, affected entity, outcome, timestamp, severity and nonsecret context in append-only `system_logs`. Successful state changes and their audit writes share their local database transaction. Failed operations can emit a separate failure audit after rollback; this must not commit the failed business change. Audit Views cannot edit/delete original records. Include user-role/status changes, settings, inventory, production decisions, model lifecycle and important failures.
+
+## 4. Context and ML integration contracts
+
+`WeatherService` and `CalendarService` validate provider responses and cache them through `WeatherRepo` and `CalendarRepo`. `ContextService` composes independent context reads; `prediction_calendar_events` links each prediction to all applied calendar events. Missing context yields an understandable retry or an explicitly labeled configured fallback. Do not silently fabricate current weather or holiday results. Adapters hide provider details and use bounded timeouts; mobile requests cannot supply arbitrary provider credentials or URLs.
+
+`PredictionOrchestrationService` validates history and context before `FastApiMlClient` calls Python. History selects one validated record per category/day using `ACTUAL_TRANSACTION`, then `IMPORTED_HISTORICAL`, then `SIMULATION_GENERATED`. Count distinct selected days, not rows, toward the 30-observation threshold. Simulation records reference their `DailyResult`; actual/imported rows preserve external source references. Training/evaluation targets `unitsSold`; estimated demand is analytical.
+
+```ts
+// Proposed response. JSON camelCase maps to canonical SQL snake_case.
+type PredictionDto = {
+  breadCategoryId: string;
+  targetDate: string;
+  predictedUnitsSold: number; // integer >= 0
+  lowConfidence: boolean;
+} & (
+  | { predictionMode: 'MODEL'; modelVersionId: string; confidence: number }
+  | { predictionMode: 'COLD_START'; modelVersionId: null; confidence: null }
 );
 ```
 
----
+Runtime schemas enforce finite MODEL confidence in `[0,100]`, a valid model version, and `lowConfidence = confidence < configuredThreshold`. MODEL requires both at least 30 selected validated days and an active valid model at generation. COLD_START requires null model version/confidence and `lowConfidence = true`. Do not serialize missing values as zero or a fixed score.
 
-## 5. Middleware
+Python `ConfidenceService` is the dedicated calculation boundary: `mu = mean(tree predictions)`, `sigma = stddev(tree predictions)`, `predicted_units_sold = max(0, round(mu))`, `confidence = 100 * max(0, min(1, 1 - sigma / max(abs(mu), 1)))`. Cold start uses `max(0, round(Bc * Dt * Mt * Wt * Ht))`, where `Bc` is the mean of available valid category units sold, falling back to configured base only when none exist. Confidence measures tree agreement, not probability of accurate sales or a promise of improvement.
 
-### 5.1 `src/middleware/auth.ts`
-Verifies Supabase JWT from Flutter app's Authorization header.
+`ModelManagementController -> ModelManagementService` supports distinct administrator operations through `MlModelVersionRepo` and `FastApiMlClient`: candidate training, evaluation, activation and restoration. RF and LR use the same chronological training/test sets; the later holdout is excluded from fitting and parameter selection. Persist dataset identity/period/origins and MAE, RMSE, MAPE, R². Exclude zero actuals only from MAPE; report undefined MAPE/R² as unavailable. Compare candidate and active model MAE on the same later holdout, reject a higher-MAE candidate, and retain the previous active model on failure. When an active model exists, an unavailable valid comparison blocks activation pending evaluation. First activation with no active model requires a valid candidate, valid chronological evaluation, administrator review and explicit confirmation; no incumbent MAE is fabricated. Restoration selects a previous valid retained version with confirmation and audit. MAPE < 10% and R² > 0.85 are at most aspirational, not acceptance gates or achieved results.
 
-```typescript
-import { Request, Response, NextFunction } from 'express';
+## 5. Operational API integration
 
-// Attaches decoded user to request
-declare global {
-  namespace Express {
-    interface Request {
-      user?: { id: string; email: string };
-    }
-  }
-}
+| Contract | Permission and invariants |
+|---|---|
+| `POST /api/predictions`; `GET /api/predictions/:date` | Manager generates next-day predictions; authorized read views preserve mode, null confidence and origins |
+| `GET /api/recommendations/:date`; `PUT /api/production-decisions` | Manager reviews/accepts/reduces/overrides; server derives feasibility and actor; overrides require reason |
+| `POST /api/admin/models/train`; `POST /api/admin/models/:id/evaluate`, `/activate`, `/restore` | Administrator; candidate remains inactive until explicit eligible activation |
+| `POST /api/simulations` with `{ date? }`; `GET /api/simulations/:date` and `/api/simulations/:date/transactions` | Manager initiates simulation; date defaults to bakery current date; no operational `producedOverride` |
+| `GET /api/leftovers`; `GET /api/leftovers/:resultId/recommendation`; `POST /api/donations`; `POST /api/waste-records`; `PATCH /api/donations/:id/status` | Role-permitted reads; manager-confirmed allocation/status changes; positive quantity, active charity/disposal reason and transactional bounds |
+| `/api/admin/charity-partners` and `/:id` | Administrator create/update/deactivate; history retained |
+| `GET /api/dashboard`; `GET /api/reports`; `GET /api/reports/export` | Both roles; date/range/period/category filters; manually requested weekly and other supported reports, CSV/PDF |
 
-export async function authMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing authorization header' });
-      return;
-    }
-    const token = authHeader.split(' ')[1];
-    // Verify JWT using Supabase JWT secret (via jose library)
-    // Or use Supabase auth.getUser(token) API
-    // Attach decoded user to req.user
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-}
+The recommendation engine reads stored predictions; it never generates predictions. It reserves confirmed but unprocessed decisions before allocating remaining shared ingredients in category `display_order`. Confirmation replaces any prior quantity for that decision, revalidates the combined plan, recalculates affected recommendations, and changes no stored inventory.
+
+For official simulation, `PosSimulationService -> SimulationCommitRepo` owns one PostgreSQL transaction/RPC. Under row locks, validate stored prediction and matching confirmed decision, check prior processing/unique relationships, revalidate all outstanding ingredient requirements, then `FifoBatchService` consumes active, unexpired batches in ascending `received_date, id`. Inventory snapshots, exact batch movements with cost snapshots, production, sales transactions with price snapshots, DailyResult and one validated simulation-origin DailySalesRecord per category commit together. Any failure rolls them all back. Repeat completed requests return `409 ALREADY_SIMULATED` with a stored-result link and no writes or deductions. No `SimulationRun` or `LeftoverRecord` table is introduced. Re-simulation remains future work until an atomic reversal policy for exact original movements and linked history is defined.
+
+The stored prediction already contains contextual effects; simulation applies only time-slot/stochastic variation. `IngredientCostService.calculateFromMovements` uses consumed batch costs, and reporting compares actual units sold with predicted units sold. External push delivery occurs after business commit; push failures must not roll back completed production or erase the notification.
+
+## 6. Recipient notifications, Realtime and FCM
+
+`NotificationService` receives a validated internal event, identifies authorized active recipients for its type, and creates a separate notification per intended recipient. Events include low stock, batch expiry, low confidence, lost sales, excessive surplus, donation-status updates, and external/system failures. This is not all-staff broadcasting. Operational details go only to users with permission to read the linked resource; push payloads contain a permitted minimal summary.
+
+Notification persistence uses `recipient_user_id`; `NotificationPreferenceRepo` reads `(user_id, notification_type)` in-app/push settings, and `FcmTokenRepo` returns only active valid tokens belonging to that user. Any event duplicate key includes recipient, event/type and related entity/version as needed, so one user's event/read state cannot suppress another user's notification. Mark-read checks both authenticated ownership and notification ID.
+
+Flutter subscribes directly to relevant foreground notification events through Supabase Realtime using its authenticated session. Realtime requires a narrowly scoped recipient-only read policy, not a Node relay. Proposed policy shape:
+
+```sql
+-- Design sketch only. Other application tables remain unavailable to client CRUD.
+CREATE POLICY notifications_recipient_read
+ON public.notifications FOR SELECT TO authenticated
+USING (
+  recipient_user_id = auth.uid()
+  AND private.realtime_notification_allowed(notification_type)
+);
 ```
 
-### 5.2 `src/middleware/errorHandler.ts`
-Centralized error handler — catches all thrown errors, logs to `system_logs`, returns consistent JSON.
+The proposed `private.realtime_notification_allowed(notification_type)` helper checks the calling user's ACTIVE profile and that type's `in_app_enabled` preference. Use a protected implementation with fixed search path and no arbitrary-user lookup surface. Do not grant clients general `user_profiles` or `notification_preferences` SELECT just to evaluate this predicate. Publish only required notification events, not token/preference/delivery/audit tables. Node remains authoritative for protected linked details and every write/mark-read action. Test actual authenticated event visibility, per-type preference changes and deactivation behavior during implementation.
 
-```typescript
-import { Request, Response, NextFunction } from 'express';
-import { ApiError } from '../utils/apiError';
-import { logger } from '../utils/logger';
+After a notification commits, push handling follows:
 
-export function errorHandler(
-  err: Error,
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const statusCode = err instanceof ApiError ? err.statusCode : 500;
-  logger.error({ err, path: req.path, method: req.method });
+1. Check the recipient's type-specific push preference and account status. If disabled, create `SKIPPED` delivery metadata with a reason; do not call FCM.
+2. Retrieve valid active recipient-owned tokens. No usable token yields a `SKIPPED` attempt with reason; an attempted send rejected as invalid is `FAILED` and deactivates the token.
+3. Create a `PENDING` attempt for each eligible device, submit through `FcmPushAdapter`, and update to `SUBMITTED` on provider acceptance or `FAILED` on rejection.
+4. Set `DELIVERED` only when delivery evidence is available; provider acceptance alone never confirms delivery. Record attempt/submission/delivery times, provider ID and failure reason according to status.
+5. Preserve the in-app record regardless of push outcome. An explicit retry may add another tracked attempt where supported; do not introduce a scheduled background retry worker in current scope.
 
-  res.status(statusCode).json({
-    error: err.message,
-    statusCode,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
-  });
-}
-```
+Device registration uses the authenticated user ID; logout deactivates the user's token registration. Token refresh verifies ownership and safely handles reassignment without exposing another user's token. Notification Views reconcile Realtime events with Node reads on app open/refresh and do not infer background delivery from a toast.
 
-### 5.3 `src/middleware/validateRequest.ts`
-Zod schema validation for request body/params/query.
+## 7. Manual pending workflow
 
-```typescript
-import { Request, Response, NextFunction } from 'express';
-import { ZodSchema } from 'zod';
+`PendingActionService` derives state when `GET /api/pending-actions` is requested on opening/refreshing the dashboard. Manager indicators cover missing next-day predictions, unconfirmed production, today's unsimulated confirmed production and remaining unallocated leftovers. Administrator Views show only applicable administration/model/configuration issues. A read may identify a pending action; it cannot call prediction, training, confirmation, simulation or allocation Services.
 
-export function validateRequest(schema: {
-  body?: ZodSchema;
-  params?: ZodSchema;
-  query?: ZodSchema;
-}) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    try {
-      if (schema.body) req.body = schema.body.parse(req.body);
-      if (schema.params) req.params = schema.params.parse(req.params) as any;
-      if (schema.query) req.query = schema.query.parse(req.query) as any;
-      next();
-    } catch (err) {
-      res.status(400).json({ error: 'Validation failed', details: err });
-    }
-  };
-}
-```
+No current-scope cron, timer, 06:00/18:00 reminder promises or automatic background scheduling is planned. Timed reminders are future work; the operation would still require the user's explicit authorized action. Foreground Realtime and background push are event-delivery mechanisms, not schedulers.
 
----
+## 8. Planned implementation order and validation
 
-## 6. Repositories (Repo Layer — Supabase only)
+1. Finalize catalogue/DTO names and role matrix with Module 0; plan transport validation, bounded errors, redacted logging and protected server configuration.
+2. Build JWT/profile authorization and locked final-administrator protection, then profile/admin Controllers, Services, Repos and corresponding Views.
+3. Build settings validation, transaction-coupled audit writes, nonsecret adapter status and context cache boundaries.
+4. Build recipient notification persistence, preferences, token ownership, delivery tracking and the scoped Realtime read exception.
+5. Connect validated ML transport, distinct model lifecycle operations and Modules 3–5 transaction boundaries.
+6. Add derived pending-state reads, permitted navigation and manual action confirmations.
+7. Execute the planned [Module 6 checks](../operation_reminders_testing/README.md), including wrong/inactive role, forged actor/role/feasibility, concurrent final-admin removal, failed settings update, nullable COLD_START confidence, higher-MAE activation, origin deduplication, shared stock, duplicate/failed simulation, recipient isolation and delivery evidence. Verify list pagination at 50 records and up to 20 active categories.
 
-> Repos do ONLY Supabase queries. No business logic, no validation. See `../ARCHITECTURE.md` §4.2.
-
-### 6.1 `src/repositories/baseRepo.ts`
-Generic CRUD base class all repos extend. See `../ARCHITECTURE.md` §7 for full code.
-
-```typescript
-import { supabase } from '../config/supabase';
-
-export class BaseRepo<T> {
-  constructor(protected tableName: string) {}
-  async findAll(filters?: Record<string, any>): Promise<T[]> { ... }
-  async findOne(id: string): Promise<T | null> { ... }
-  async insert(data: Partial<T>): Promise<T> { ... }
-  async update(id: string, data: Partial<T>): Promise<T> { ... }
-  async delete(id: string): Promise<void> { ... }
-}
-```
-
-### 6.2 `src/repositories/weatherRepo.ts`
-```typescript
-export class WeatherRepo extends BaseRepo<WeatherRecord> {
-  constructor() { super('weather_records'); }
-
-  async findByDate(date: string): Promise<WeatherRecord | null> {
-    const { data, error } = await supabase
-      .from('weather_records').select('*').eq('date', date).single();
-    if (error) throw error;
-    return data;
-  }
-
-  async upsert(record: WeatherRecord): Promise<WeatherRecord> {
-    const { data, error } = await supabase
-      .from('weather_records').upsert(record, { onConflict: 'date' })
-      .select().single();
-    if (error) throw error;
-    return data;
-  }
-}
-export const weatherRepo = new WeatherRepo();
-```
-
-### 6.3 `src/repositories/calendarRepo.ts`
-```typescript
-export class CalendarRepo extends BaseRepo<CalendarEvent> {
-  constructor() { super('calendar_events'); }
-
-  async findByDate(date: string): Promise<CalendarEvent[]> {
-    const { data, error } = await supabase
-      .from('calendar_events').select('*').eq('date', date);
-    if (error) throw error;
-    return data ?? [];
-  }
-
-  async upsertMany(events: CalendarEvent[]): Promise<void> {
-    if (events.length === 0) return;
-    const { error } = await supabase
-      .from('calendar_events').upsert(events, { onConflict: 'date,event_type' });
-    if (error) throw error;
-  }
-}
-export const calendarRepo = new CalendarRepo();
-```
-
-### 6.4 `src/repositories/bakerySettingsRepo.ts`
-```typescript
-export class BakerySettingsRepo extends BaseRepo<BakerySettings> {
-  constructor() { super('bakery_settings'); }
-
-  async getSingle(): Promise<BakerySettings | null> {
-    const { data, error } = await supabase
-      .from('bakery_settings').select('*').limit(1).single();
-    if (error) throw error;
-    return data;
-  }
-}
-export const bakerySettingsRepo = new BakerySettingsRepo();
-```
-
-### 6.5 `src/repositories/systemLogRepo.ts`
-```typescript
-export class SystemLogRepo extends BaseRepo<SystemLog> {
-  constructor() { super('system_logs'); }
-}
-export const systemLogRepo = new SystemLogRepo();
-```
-
----
-
-## 7. Adapters (External API Clients — raw HTTP only)
-
-> Adapters do ONLY raw HTTP calls to external services. No DB, no business logic. Called by services.
-
-### 7.1 `src/adapters/conditionMapper.ts`
-Maps OpenWeatherMap conditions → canonical conditions used by the system.
-
-```typescript
-import { WeatherMultipliers } from '../../shared/types';
-
-const CONDITION_MAP: Record<string, string> = {
-  'Clear': 'sunny',
-  'Rain': 'rainy',
-  'Drizzle': 'rainy',
-  'Clouds': 'cloudy',
-  'Thunderstorm': 'thunderstorm',
-  'Haze': 'haze',
-  'Mist': 'haze',
-  'Fog': 'haze',
-  'Snow': 'snow',
-};
-
-export function mapCondition(
-  owmCondition: string,
-  tempC: number
-): string {
-  if (tempC > 32) return 'very_hot';
-  return CONDITION_MAP[owmCondition] ?? 'cloudy';
-}
-
-export function getMultiplier(
-  condition: string,
-  multipliers: WeatherMultipliers
-): number {
-  return multipliers[condition] ?? 1.0;
-}
-```
-
-### 7.2 `src/adapters/openWeatherMapClient.ts`
-Raw HTTP wrapper — no DB, no business logic. Called by weatherService.
-
-```typescript
-import { env } from '../config/env';
-import { retryWithBackoff } from '../utils/retryWithBackoff';
-
-export const openWeatherMapClient = {
-  async fetchWeather(date: string): Promise<RawOWMResponse> {
-    const isToday = date === new Date().toISOString().split('T')[0];
-    const endpoint = isToday ? '/data/2.5/weather' : '/data/2.5/forecast';
-    const url = `${OWM_BASE}${endpoint}?lat=${env.BAKERY_LAT}&lon=${env.BAKERY_LON}&units=metric&appid=${env.OPENWEATHERMAP_API_KEY}`;
-    return retryWithBackoff(() => fetchJson(url));
-  },
-};
-```
-
-### 7.3 `src/adapters/nagerDateClient.ts`
-Raw HTTP wrapper — no DB, no business logic. Called by calendarService.
-
-```typescript
-import { env } from '../config/env';
-import { retryWithBackoff } from '../utils/retryWithBackoff';
-
-export const nagerDateClient = {
-  async fetchYearHolidays(year: number): Promise<RawNagerResponse[]> {
-    const url = `${env.NAGER_DATE_BASE_URL}/api/v3/PublicHolidays/${year}/MY`;
-    return retryWithBackoff(() => fetchJson(url));
-  },
-};
-```
-
----
-
-## 8. Services (Service Layer — business logic + calls repos)
-
-> Services contain business logic. They call repos for DB access and adapters for external HTTP. No direct Supabase calls.
-
-### 8.1 `src/services/weatherService.ts`
-```typescript
-import { weatherRepo } from '../repositories/weatherRepo';
-import { openWeatherMapClient } from '../adapters/openWeatherMapClient';
-import { conditionMapper } from '../adapters/conditionMapper';
-
-interface GetWeatherOptions { forceRefresh?: boolean; }
-
-export const weatherService = {
-  async getWeather(date: string, opts?: GetWeatherOptions): Promise<WeatherRecord> {
-    // 1. Check cache via repo
-    if (!opts?.forceRefresh) {
-      const cached = await weatherRepo.findByDate(date);
-      if (cached) return cached;
-    }
-
-    // 2. Fetch from external API via adapter
-    const data = await openWeatherMapClient.fetchWeather(date);
-
-    // 3. Map condition (pure function)
-    const condition = conditionMapper.map(data.weather[0].main, data.main.temp);
-    const record: WeatherRecord = {
-      date,
-      condition,
-      temp_high_c: data.main.temp_max,
-      temp_low_c: data.main.temp_min,
-      humidity_pct: data.main.humidity,
-    };
-
-    // 4. Store via repo
-    return weatherRepo.upsert(record);
-  },
-};
-```
-
-### 8.2 `src/services/calendarService.ts`
-```typescript
-import { calendarRepo } from '../repositories/calendarRepo';
-import { nagerDateClient } from '../adapters/nagerDateClient';
-
-const HOLIDAY_MULTIPLIERS: Record<string, number> = {
-  'public_holiday': 1.30,
-  'school_holiday': 0.90,
-  'religious_holiday': 1.10,
-  'local_event': 1.15,
-};
-
-const TYPE_MAP: Record<string, string> = {
-  'Public': 'public_holiday',
-  'Bank': 'public_holiday',
-  'School': 'school_holiday',
-  'Observance': 'religious_holiday',
-};
-
-export const calendarService = {
-  async getHolidays(date: string, opts?: { forceRefresh?: boolean }): Promise<CalendarEvent[]> {
-    // 1. Check cache via repo
-    if (!opts?.forceRefresh) {
-      const cached = await calendarRepo.findByDate(date);
-      if (cached.length > 0) return cached;
-    }
-
-    // 2. Fetch from external API via adapter
-    const year = parseInt(date.split('-')[0]);
-    const holidays = await nagerDateClient.fetchYearHolidays(year);
-
-    // 3. Filter + map types (business logic)
-    const events: CalendarEvent[] = holidays
-      .filter((h: any) => h.date === date)
-      .map((h: any) => ({
-        date: h.date,
-        event_type: TYPE_MAP[h.type] ?? 'local_event',
-        event_name: h.localName || h.name,
-        demand_multiplier: HOLIDAY_MULTIPLIERS[TYPE_MAP[h.type] ?? 'local_event'] ?? 1.0,
-      }));
-
-    // 4. Store via repo
-    await calendarRepo.upsertMany(events);
-    return events;
-  },
-};
-```
-
-### 8.3 `src/services/contextService.ts` (Orchestrator)
-The key pattern — parallel API calls (2.5x faster than sequential). Calls two services.
-
-```typescript
-import { weatherService } from './weatherService';
-import { calendarService } from './calendarService';
-
-export interface DailyContext {
-  date: string;
-  weather: {
-    condition: string;
-    temp_high_c: number;
-    temp_low_c: number;
-    humidity_pct: number;
-    demand_multiplier: number;
-  } | null;
-  calendar: {
-    event_type: string;
-    event_name: string;
-    demand_multiplier: number;
-  }[];
-}
-
-export async function fetchContext(date: string): Promise<DailyContext> {
-  const [weather, calendar] = await Promise.all([
-    weatherService.getWeather(date),       // service → repo + adapter
-    calendarService.getHolidays(date),     // service → repo + adapter
-  ]);
-
-  return {
-    date,
-    weather: weather ? {
-      condition: weather.condition,
-      temp_high_c: weather.temp_high_c,
-      temp_low_c: weather.temp_low_c,
-      humidity_pct: weather.humidity_pct,
-      demand_multiplier: getWeatherMultiplier(weather.condition),
-    } : null,
-    calendar,
-  };
-}
-```
-
----
-
-## 8. Controllers (Controller Layer — thin HTTP handlers)
-
-### 8.1 `src/controllers/healthController.ts`
-```typescript
-import { Router } from 'express';
-
-export const healthController = Router();
-
-healthController.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-```
-
-### 8.2 `src/controllers/bakerySettingsController.ts`
-```typescript
-import { Router } from 'express';
-import { supabase } from '../config/supabase';
-
-export const bakerySettingsController = Router();
-
-bakerySettingsController.get('/bakery-settings', async (req, res, next) => {
-  try {
-    const { data, error } = await supabase
-      .from('bakery_settings')
-      .select('*')
-      .limit(1)
-      .single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) { next(err); }
-});
-```
-
-### 8.3 `src/controllers/weatherController.ts`
-```typescript
-import { Router } from 'express';
-import { weatherService } from '../services/weatherService';
-
-export const weatherController = Router();
-
-weatherController.get('/weather/:date', async (req, res, next) => {
-  try {
-    const { date } = req.params;
-    const weather = await weatherService.getWeather(date);
-    res.json(weather);
-  } catch (err) { next(err); }
-});
-
-weatherController.post('/weather/refresh', async (req, res, next) => {
-  try {
-    const { date } = req.body;
-    const weather = await weatherService.getWeather(date, { forceRefresh: true });
-    res.json(weather);
-  } catch (err) { next(err); }
-});
-```
-
-### 8.4 `src/controllers/calendarController.ts`
-```typescript
-import { Router } from 'express';
-import { calendarService } from '../services/calendarService';
-
-export const calendarController = Router();
-
-calendarController.get('/calendar/:date', async (req, res, next) => {
-  try {
-    const { date } = req.params;
-    const events = await calendarService.getHolidays(date);
-    res.json(events);
-  } catch (err) { next(err); }
-});
-
-calendarController.post('/calendar/refresh', async (req, res, next) => {
-  try {
-    const { date } = req.body;
-    const events = await calendarService.getHolidays(date, { forceRefresh: true });
-    res.json(events);
-  } catch (err) { next(err); }
-});
-```
-
-### 8.5 `src/controllers/contextController.ts`
-```typescript
-import { Router } from 'express';
-import { fetchContext } from '../services/contextService';
-
-export const contextController = Router();
-
-contextController.get('/context/:date', async (req, res, next) => {
-  try {
-    const { date } = req.params;
-    const context = await fetchContext(date);
-    res.json(context);
-  } catch (err) { next(err); }
-});
-```
-
-### 8.6 Stub Controllers (return 501 until later modules)
-
-> **Superseded sketch:** Controller files must declare constructor-injected classes, not `Router()` objects. Use `PredictionController`, `InventoryController`, `PosSimulationController`, `LeftoverManagementController` and `DashboardController`; map their methods from separate thin `routes/*.ts` modules. The following pre-revision snippet is retained only as historical planning context and must not be implemented.
-
-```typescript
-// predictionController.ts, inventoryController.ts, salesController.ts,
-// donationController.ts, dashboardController.ts
-import { Router } from 'express';
-
-export const predictionController = Router();
-
-predictionController.post('/predictions', (req, res) => {
-  res.status(501).json({ error: 'Not implemented — Module 2' });
-});
-predictionController.get('/predictions/:date', (req, res) => {
-  res.status(501).json({ error: 'Not implemented — Module 2' });
-});
-// (same pattern for inventory, sales, donation, dashboard stubs)
-```
-
-### 8.7 `src/controllers/index.ts` — Controller Aggregator
-```typescript
-import { Router } from 'express';
-import { healthController } from './healthController';
-import { bakerySettingsController } from './bakerySettingsController';
-import { weatherController } from './weatherController';
-import { calendarController } from './calendarController';
-import { contextController } from './contextController';
-import { predictionController } from './predictionController';
-import { inventoryController } from './inventoryController';
-import { salesController } from './salesController';
-import { donationController } from './donationController';
-import { dashboardController } from './dashboardController';
-
-export const router = Router();
-
-router.use(healthController);
-router.use(bakerySettingsController);
-router.use(weatherController);
-router.use(calendarController);
-router.use(contextController);
-router.use(predictionController);
-router.use(inventoryController);
-router.use(salesController);
-router.use(donationController);
-router.use(dashboardController);
-```
-
----
-
-## 9. App Setup
-
-### 9.1 `src/app.ts`
-```typescript
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import { router } from './controllers';
-import { healthController } from './controllers/healthController';
-import { errorHandler } from './middleware/errorHandler';
-import { authMiddleware } from './middleware/auth';
-
-export const app = express();
-
-app.use(helmet());
-app.use(cors());
-app.use(express.json());
-app.use(morgan('dev'));
-
-// Health check is public (no auth)
-app.use('/api/health', healthController);
-
-// All other /api routes require auth
-app.use('/api', authMiddleware, router);
-
-app.use(errorHandler);
-```
-
-### 9.2 `src/server.ts`
-```typescript
-import { app } from './app';
-import { env } from './config/env';
-
-app.listen(env.PORT, () => {
-  console.log(`Server running on port ${env.PORT}`);
-});
-```
-
----
-
-## 10. Utilities
-
-### 10.1 `src/utils/apiError.ts`
-```typescript
-export class ApiError extends Error {
-  constructor(
-    public statusCode: number,
-    message: string,
-    public details?: unknown
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
-
-export class NotFoundError extends ApiError {
-  constructor(resource: string) {
-    super(404, `${resource} not found`);
-  }
-}
-
-export class ExternalApiError extends ApiError {
-  constructor(service: string, message: string) {
-    super(502, `${service} API error: ${message}`);
-  }
-}
-```
-
-### 10.2 `src/utils/retryWithBackoff.ts`
-```typescript
-export async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelayMs: number = 1000
-): Promise<T> {
-  let lastError: Error;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err as Error;
-      if (attempt < maxRetries - 1) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-  throw lastError!;
-}
-```
-
-### 10.3 `src/utils/logger.ts`
-```typescript
-type LogLevel = 'info' | 'warn' | 'error';
-
-function log(level: LogLevel, message: string, meta?: unknown) {
-  const timestamp = new Date().toISOString();
-  const entry = { timestamp, level, message, ...(meta && { meta }) };
-  console.log(JSON.stringify(entry));
-  // Also write to system_logs table (async, fire-and-forget)
-}
-
-export const logger = {
-  info: (msg: string, meta?: unknown) => log('info', msg, meta),
-  warn: (msg: string, meta?: unknown) => log('warn', msg, meta),
-  error: (msg: string, meta?: unknown) => log('error', msg, meta),
-};
-```
-
----
-
-## 11. Request/Response Flow
-
-```
-1. Flutter sends request with JWT
-   GET /api/context/2026-06-26
-   Authorization: Bearer <supabase-jwt>
-       ↓
-2. Express app receives
-   ├─ helmet (security headers)
-   ├─ cors (allow Flutter origin)
-   ├─ express.json (parse body)
-   ├─ morgan (log request)
-       ↓
-3. Auth middleware
-   ├─ Extract JWT from header
-   ├─ Verify with Supabase
-   ├─ Attach user to req.user
-   └─ If invalid → 401
-       ↓
-4. Controller handler (contextController — Controller)
-   └─ Calls fetchContext('2026-06-26') from contextService
-       ↓
-5. contextService (Service — orchestrator, Promise.all)
-   ├─ weatherService.getWeather()
-   │   ├─ weatherRepo.findByDate() → Supabase cache (Repo)
-   │   └─ if miss: openWeatherMapClient.fetch() → weatherRepo.upsert()
-   └─ calendarService.getHolidays()
-       ├─ calendarRepo.findByDate() → Supabase cache (Repo)
-       └─ if miss: nagerDateClient.fetchYear() → calendarRepo.upsertMany()
-        ↓
-6. Both services return → combined DailyContext object
-        ↓
-7. Response sent to Flutter (Controller → res.json)
-   200 OK { date, weather, calendar }
-        ↓
-8. If error at any step:
-   └─ errorHandler middleware
-      ├─ systemLogRepo.insert() (Repo → Supabase)
-      └─ Return structured error JSON
-```
-
----
-
-## 12. TypeScript Config (`tsconfig.json`)
-
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "esModuleInterop": true,
-    "strict": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
-  },
-  "include": ["src", "shared"],
-  "exclude": ["node_modules", "dist"]
-}
-```
-
----
-
-## 13. Verification Plan
-
-| Step | Command | Expected Result |
-|---|---|---|
-| 1 | `cd backend && npm install` | Dependencies installed |
-| 2 | `npm run dev` | Server starts on port 3000 |
-| 3 | `GET /api/health` | 200 `{ status: "ok" }` |
-| 4 | `GET /api/bakery-settings` (with JWT) | Returns bakery config row |
-| 5 | `GET /api/weather/2026-06-26` (with JWT) | Returns weather (cached or fetched) |
-| 6 | `GET /api/calendar/2026-06-26` (with JWT) | Returns holidays for date |
-| 7 | `GET /api/context/2026-06-26` (with JWT) | Returns combined weather + calendar |
-| 8 | `GET /api/predictions/today` | 501 Not Implemented (stub) |
-| 9 | `GET /api/health` (no JWT) | 200 (health is public) |
-| 10 | `GET /api/weather/today` (no JWT) | 401 Unauthorized |
-| 11 | `npm run typecheck` | No type errors |
-| 12 | `npm run lint` | No lint errors |
-
----
-
-## 14. Implementation Order
-
-1. Create `package.json`, `tsconfig.json`, `.env.example`
-2. Create `src/config/env.ts` + `src/config/supabase.ts`
-3. Create `src/utils/` (logger, apiError, retryWithBackoff)
-4. Create `src/middleware/` (auth, errorHandler, validateRequest)
-5. Create `src/repositories/baseRepo.ts` (generic CRUD base)
-6. Create `src/repositories/` (bakerySettingsRepo, weatherRepo, calendarRepo, systemLogRepo)
-7. Create `src/adapters/` (conditionMapper, openWeatherMapClient, nagerDateClient)
-8. Create `src/services/` (weatherService, calendarService, contextService)
-9. Create `src/controllers/` (all controllers + stubs + index)
-10. Create `src/app.ts` + `src/server.ts`
-11. Install deps: `npm install`
-12. Verify: run server + test endpoints
-
----
-
-## 15. Open Items for Implementation
-
-| # | Item | Notes |
-|---|---|---|
-| 1 | JWT verification method | Use `jose` library to verify with Supabase JWT secret, OR use Supabase `auth.getUser(token)` API |
-| 2 | Weather cache TTL | How long before re-fetching? Suggest: today = 1 hour, tomorrow = 3 hours |
-| 3 | Holiday caching | Yearly refresh is enough (holidays don't change after Jan 1) |
-| 4 | Rate limiting | Add `express-rate-limit` for production? |
-
----
-
-**Plan Status:** Complete. Ready for implementation on your signal.
+No packages, migrations, application code, deployment or runtime tests are part of this Markdown reconciliation. Provider operational details and a donation-cancellation/reallocation policy remain decisions for later implementation; they must not be presented as completed functionality.

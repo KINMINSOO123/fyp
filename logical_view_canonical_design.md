@@ -1,342 +1,242 @@
-# Smart Bakery Logical View — Canonical Proposed Class Specification
+# Smart Bakery proposed Logical View
 
-**Document status:** Proposed design; not implementation-verified  
-**System:** Smart Bakery Food Waste Reduction System  
-**Purpose:** Canonical classifier specification for the Chapter 4 Logical View  
-**Diagram output:** This document specifies diagram content but does not draw either diagram  
-**Source status:** No Smart Bakery Flutter, TypeScript backend or Python ML implementation currently exists
+Reconciled 2026-10-11 with the latest DOCX; [repository report mirror](RSW_SooKinMin_Project1.docx.md), Sections 4.2-4.5 and 4.8-4.9. This specification describes proposed classifiers and relationships, not verified implementation. `FYP Report.md` was deleted by the user and is not restored. Earlier audits remain historical in [the diagram plan](logical_view_class_diagram_plan.md).
 
-## 1. Design status and scope
+## 1. Classifier conventions and diagram scope
 
-Every classifier in this document is explicitly **proposed**. A classifier must not be described as implemented until a later source audit verifies a corresponding `.dart`, `.ts` or `.py` declaration.
+Two diagrams divide the core application from the ML boundary. Screen classes end in `View`; TypeScript request, business and persistence classes use `Controller`, `Service` and `Repo`. Named algorithm components are service-layer classes. Express router modules and FastAPI route functions register/delegate calls and are not UML classes. Framework widgets/private State classes, the Flutter counter starter and library classes are excluded.
 
-The final Logical View is divided into two proposed class diagrams:
+Dependencies (`..>`) describe calling/using collaborators. Domain associations (`-->`, with multiplicities) describe persisted links. Constructor injection does not imply lifecycle composition. DTOs have no persistence identity. `BaseRepo<T>` may be a shared proposed abstract Repo, but inheritance is unnecessary for every concrete Repo and is not claimed to exist.
 
-| Diagram | Scope |
+Use `DailyPrediction` as the prediction entity. `DailyResult` is the detailed simulation outcome; `DailySalesRecord` is validated, provenance-labelled history. `SimulationRun` and `LeftoverRecord` are not persisted classifiers. Donation/waste category is derived through DailyResult.
+
+## 2. Core Application Logical View
+
+```mermaid
+classDiagram
+  class PredictionView
+  class ProductionPlanningView
+  class PosSimulationView
+  class LeftoverManagementView
+  class ReportsView
+  class NotificationsView
+  class ApiClient
+  class PredictionController
+  class ProductionDecisionController
+  class PosSimulationController
+  class LeftoverManagementController
+  class ReportController
+  class NotificationController
+  class PredictionOrchestrationService
+  class ProductionDecisionService
+  class RecommendationEngine
+  class PosSimulationService
+  class TransactionRecordingService
+  class LeftoverManagementService
+  class ReportService
+  class NotificationService
+  class DailyPredictionRepo
+  class ProductionDecisionRepo
+  class SimulationCommitRepo
+  class DailyResultRepo
+  class DonationRepo
+  class WasteRecordRepo
+  class ReportRepo
+  class NotificationRepo
+  class FastApiMlClient
+  class ReportExportAdapter
+  class NotificationRealtimeClient
+  PredictionView ..> ApiClient
+  ProductionPlanningView ..> ApiClient
+  PosSimulationView ..> ApiClient
+  LeftoverManagementView ..> ApiClient
+  ReportsView ..> ApiClient
+  NotificationsView ..> ApiClient
+  NotificationsView ..> NotificationRealtimeClient : recipient foreground events
+  ApiClient ..> PredictionController
+  ApiClient ..> ProductionDecisionController
+  ApiClient ..> PosSimulationController
+  ApiClient ..> LeftoverManagementController
+  ApiClient ..> ReportController
+  ApiClient ..> NotificationController
+  PredictionController ..> PredictionOrchestrationService
+  PredictionOrchestrationService ..> DailyPredictionRepo
+  PredictionOrchestrationService ..> FastApiMlClient
+  ProductionDecisionController ..> ProductionDecisionService
+  ProductionDecisionService ..> RecommendationEngine
+  ProductionDecisionService ..> ProductionDecisionRepo
+  RecommendationEngine ..> DailyPredictionRepo : reads stored prediction
+  PosSimulationController ..> PosSimulationService
+  PosSimulationService ..> TransactionRecordingService
+  PosSimulationService ..> SimulationCommitRepo : one atomic RPC
+  LeftoverManagementController ..> LeftoverManagementService
+  LeftoverManagementService ..> DailyResultRepo
+  LeftoverManagementService ..> DonationRepo
+  LeftoverManagementService ..> WasteRecordRepo
+  ReportController ..> ReportService
+  ReportService ..> ReportRepo
+  ReportService ..> ReportExportAdapter
+  NotificationController ..> NotificationService
+  NotificationService ..> NotificationRepo
+```
+
+These classes are a focused subset. The following catalogue adds concrete collaborators for all eight functional modules. All methods are proposed operation responsibilities, not implemented APIs.
+
+### Views and client boundaries
+
+| Proposed classifier | Responsibility/dependencies |
 |---|---|
-| **Core Application Logical View** | Flutter Views and API client; TypeScript Controllers, Business Services, Repos and external-data adapters; central bakery domain models |
-| **Machine-Learning Logical View** | TypeScript ML orchestration boundary; `FastApiMlClient`; language-neutral ML DTO contract; Python feature, prediction, training and evaluation service classes |
+| LoginView / ProfileView | SupabaseAuthClient login/logout; ApiClient own-profile reads/updates |
+| ManagerDashboardView / AdministratorDashboardView | Dashboard DTOs and permission-specific pending indicators |
+| PredictionView / ProductionPlanningView | Mode-aware prediction/confidence; joint feasibility and explicit confirmation/reason |
+| PosSimulationView | Current-date default, prerequisite status, explicit run, simulated result/transactions |
+| InventoryView / RecipeView | Administrator master data/batches/recipes; manager permitted stock/shortage visibility |
+| ModelManagementView | Administrator candidate training, metric review, activation/restoration confirmation |
+| LeftoverManagementView / DonationStatusView / CharityPartnersView | Manager allocation/status; administrator charity management |
+| ReportsView | Date/period/category filters, weekly summaries, CSV/PDF exports with shared formulas |
+| NotificationsView / NotificationPreferencesView | Own notifications/read state/type preferences |
+| UserAdministrationView / SettingsView / ServiceStatusView / AuditView | Administrator accounts/roles, nonsecret settings/service state, audit review |
+| ApiClient | Protected HTTPS JSON requests with session JWT; typed response/errors |
+| SupabaseAuthClient | Authentication platform exception; session establishment/removal |
+| NotificationRealtimeClient | Recipient-only foreground Supabase subscription; unsubscribe on logout/account changes |
+| FcmClient | Background reception; token registration/deactivation through Node |
 
-This split keeps each diagram readable while showing the complete TypeScript-to-FastAPI boundary. Classifiers marked **Both** are boundary elements repeated in both diagrams for traceability.
+### Controllers, Services, Repos and endpoints
 
-## 2. Canonical architecture decisions
+| Functional module | Controller -> Service / principal operations | Repos / adapters | Planned Express endpoints and permission |
+|---|---|---|---|
+| 1 Access | ProfileController -> ProfileService: get/update own profile | UserProfileRepo | GET/PATCH `/api/profile`, both ACTIVE roles |
+| 1 / 8 Accounts | UserAdministrationController -> UserAdministrationService: create/edit role/status, guard final active admin | UserProfileRepo, AuthAdminAdapter, AuditService | GET/POST `/api/admin/users`, PATCH `/api/admin/users/:id`, administrator |
+| 2 Prediction | PredictionController -> PredictionOrchestrationService: generate/read; orchestration selects validated category/day records | DailySalesRecordRepo, DailyPredictionRepo, MlModelVersionRepo, ContextService, FastApiMlClient | POST `/api/predictions` manager; GET `/api/predictions/:date` permitted read |
+| 2 / 8 Models | ModelManagementController -> ModelManagementService: train candidate, evaluate, activate, restore | MlModelVersionRepo, ModelEvaluationRepo, FeatureImportanceRepo, FastApiMlClient, AuditService | GET `/api/admin/models`; POST `/api/admin/models/train`, `/api/admin/models/:id/evaluate`, `/activate`, `/restore`, administrator |
+| 3 Master data | InventoryController / RecipeController -> InventoryService / RecipeService | IngredientRepo, BreadCategoryRepo, RecipeRepo, InventoryRepo, InventoryBatchRepo, InventoryLogRepo | `/api/admin/ingredients`, `/api/admin/batches`, `/api/admin/categories`, `/api/admin/recipes` CRUD administrator; GET `/api/inventory` permitted visibility |
+| 3 Planning | RecommendationController -> RecommendationEngine; ProductionDecisionController -> ProductionDecisionService | DailyPredictionRepo, ProductionDecisionRepo, RecipeRepo, InventoryBatchRepo | GET `/api/recommendations/:date`, PUT `/api/production-decisions`, manager |
+| 4 Simulation | PosSimulationController -> PosSimulationService: authorize/validate/run; TransactionRecordingService: sales/result payloads; FifoBatchService: ordered deductions; IngredientCostService: snapshot cost | SimulationCommitRepo, InventoryBatchRepo, InventoryLogRepo, DailyProductionRepo, SalesTransactionRepo, DailyResultRepo, DailySalesRecordRepo | POST `/api/simulations` manager; GET `/api/simulations/:date` and `/api/simulations/:date/transactions`, permitted read |
+| 5 Allocation | LeftoverManagementController -> LeftoverManagementService: read/recommend/confirm allocation/update status | DailyResultRepo, DonationRepo, WasteRecordRepo, CharityPartnerRepo, AuditService | GET `/api/leftovers`, `/api/leftovers/:resultId/recommendation`; POST `/api/donations`, `/api/waste-records`; PATCH `/api/donations/:id/status`, manager mutation |
+| 5 / 8 Charity | CharityPartnerController -> CharityPartnerService: manage active partners | CharityPartnerRepo, AuditService | `/api/admin/charity-partners` CRUD, administrator |
+| 6 Reporting | DashboardController -> DashboardService; ReportController -> ReportService: filtered aggregates/export | ReportRepo, ReportExportAdapter | GET `/api/dashboard`, `/api/reports`, `/api/reports/export`, both roles |
+| 7 Notifications | NotificationController -> NotificationService: recipient list/read/preferences/token/delivery | NotificationRepo, NotificationPreferenceRepo, FcmTokenRepo, NotificationDeliveryRepo, FcmPushAdapter | GET `/api/notifications`; PATCH `/api/notifications/:id/read`; GET/PATCH `/api/notification-preferences`; POST/DELETE `/api/fcm-tokens`, own records only |
+| 7 Pending actions | PendingActionController -> PendingActionService: derive missing manual steps on request | DailyPredictionRepo, ProductionDecisionRepo, DailyResultRepo | GET `/api/pending-actions`, role-scoped; no scheduler |
+| 8 Settings | SettingsController -> SettingsService: validate singleton/settings changes and service configuration | BakerySettingsRepo, SystemSettingsRepo, AuditService, external adapters | GET/PATCH `/api/admin/settings`, GET `/api/admin/service-status`, administrator |
+| 8 Audit | AuditController -> AuditService: append important actions, read immutable audit history | SystemLogRepo | GET `/api/admin/audit`, administrator |
 
-| # | Canonical decision |
-|---:|---|
-| 1 | The design is labelled **Proposed Logical View**, never implementation-verified. |
-| 2 | Node.js/Express owns all Supabase PostgreSQL access. TypeScript Business Services use TypeScript Repos; only Repos use the Supabase database client. |
-| 3 | FastAPI does not import or call Supabase. TypeScript prepares validated prediction/training input and persists relevant returned prediction, model-version and feature-importance data through TypeScript Repos. |
-| 4 | Express router files are registration modules, not UML classes. They instantiate/map route handlers to Controller classes and are excluded from the class diagrams. |
-| 5 | TypeScript Controllers, Business Services, Repos and external-service adapters are proposed as constructor-injected classes. |
-| 6 | FastAPI route functions are thin endpoint functions and are excluded as classifiers. They validate Pydantic DTOs, call a Python service class and serialize its result. |
-| 7 | Flutter screen-level classes use the `View` suffix consistently. |
-| 8 | `DailyPrediction` is the only canonical prediction-domain name. `DemandPrediction` is retired. |
-| 9 | Every repository name uses the `Repo` suffix. The shared base is `BaseRepo<T>`. |
-| 10 | The prediction target is `unitsSold`. `lostSales` is retained for analysis but is not the current training target. |
-| 11 | Simulated operational data is represented by `DailyProduction`, `SalesTransaction` and `DailyResult`. `WasteRecord` is now required for manager-confirmed disposal; `SimulationRun` and `LeftoverRecord` remain excluded. |
-| 12 | The permitted primary chains are `View → API Client → Controller → Service → Repo → Supabase`, `Service → External Adapter → External API`, and `TypeScript Service → FastApiMlClient → FastAPI endpoint → Python Service`. |
-| 13 | `PredictionOrchestrationService` and `FastApiMlClient` are mandatory proposed boundary classes. |
-| 14 | Starter Flutter classes, private `State` classes, small widgets, utility functions, framework types and nonessential database-row classes are excluded. |
+`ContextService` composes `WeatherService`/`CalendarService`, `WeatherRepo`/`CalendarRepo`, and `OpenWeatherMapClient`/`NagerDateClient`. Report-export and external adapters do not access application tables. No Controller directly invokes a Repo. Record/read permissions follow Table 4.27 and purpose-specific DTOs; permitted read visibility never grants an administrator manager-only write operations.
 
-## 3. UML conventions
+## 3. Machine-Learning Logical View
 
-| Stereotype | Meaning |
+```mermaid
+classDiagram
+  class PredictionOrchestrationService
+  class ModelManagementService
+  class FastApiMlClient
+  class PredictionRequest
+  class PredictionResponse
+  class TrainingRequest
+  class EvaluationRequest
+  class PredictionService
+  class FeaturePreparationService
+  class ColdStartService
+  class ConfidenceService
+  class ModelTrainingService
+  class ModelEvaluationService
+  class RandomForestModel
+  class LinearRegressionModel
+  class ModelArtifactStore
+  PredictionOrchestrationService ..> FastApiMlClient
+  ModelManagementService ..> FastApiMlClient
+  FastApiMlClient ..> PredictionRequest
+  FastApiMlClient ..> PredictionResponse
+  FastApiMlClient ..> TrainingRequest
+  FastApiMlClient ..> EvaluationRequest
+  FastApiMlClient ..> PredictionService : via thin FastAPI route
+  FastApiMlClient ..> ModelTrainingService : via thin FastAPI route
+  FastApiMlClient ..> ModelEvaluationService : via thin FastAPI route
+  PredictionService ..> FeaturePreparationService
+  PredictionService ..> ColdStartService
+  PredictionService ..> ConfidenceService
+  PredictionService ..> RandomForestModel
+  ModelTrainingService ..> FeaturePreparationService
+  ModelTrainingService ..> RandomForestModel
+  ModelTrainingService ..> LinearRegressionModel
+  ModelTrainingService ..> ModelArtifactStore
+  ModelEvaluationService ..> RandomForestModel
+  ModelEvaluationService ..> LinearRegressionModel
+  ModelEvaluationService ..> ModelArtifactStore
+```
+
+| Class / DTO | Required behavior |
 |---|---|
-| `<<proposed view>>` | Flutter screen-level presentation class |
-| `<<proposed client>>` | Flutter HTTP client boundary |
-| `<<proposed controller>>` | TypeScript request-handling class called by an Express router module |
-| `<<proposed service>>` | TypeScript or Python business/application service class |
-| `<<proposed repository>>` | TypeScript Supabase data-access class |
-| `<<proposed abstract repository>>` | Proposed abstract generic TypeScript Repo base |
-| `<<proposed external adapter>>` | TypeScript client for an external HTTP/provider boundary |
-| `<<proposed domain model>>` | Central business entity/data model |
-| `<<proposed enumeration>>` | Closed set of canonical domain values |
-| `<<proposed DTO>>` | Typed request, response or calculation result with no database identity |
-| `<<proposed model wrapper>>` | Python wrapper around trained estimators |
-| `<<proposed artifact store>>` | Python file-based model persistence component; not a database Repo |
+| PredictionRequest / PredictionCategoryInput | Target date, category, deduplicated validated history, context, configured cold-start factors/base, active artifact metadata; no database credentials |
+| TrainingObservation | observation date/category, unitsSold, dataOrigin, source traceability and context; no estimatedDemand target |
+| PredictionService | RF only with >=30 distinct validated days and valid active model; otherwise ColdStartService |
+| ConfidenceService | From tree mean mu and standard deviation sigma: `100 * max(0, min(1, 1 - sigma / max(abs(mu), 1)))`; numerical [0,100], low below threshold initially75 |
+| ColdStartService | Bc from observed mean or configured base only if empty; `max(0, round(Bc * Dt * Mt * Wt * Ht))`; null confidence/model reference, low-confidence heuristic label |
+| PredictionResponse | Discriminated MODEL result (numeric confidence, modelVersionId) or COLD_START result (both null); nonnegative integer predictedUnitsSold |
+| TrainingRequest / ModelTrainingService | Administrator-provided validated datasets/split and parameters; inactive RF candidate and LR comparison; no activation |
+| EvaluationRequest / ModelEvaluationService | Untouched chronologically later holdout, same RF/LR datasets; comparable active/candidate metrics |
+| ModelMetrics | MAE/RMSE include zeros; MAPE excludes zero actuals only; R^2/other undefined metrics nullable with reason; sample counts and origin composition; simulation label |
+| ModelArtifactStore | Versioned artifacts and metadata; no Supabase connection and no active-model database writes |
 
-Relationship notation used in the tables:
+Node `ModelManagementService` enforces NFR-ACC-05: compare candidate and active MAE on the same valid later test dataset and reject a worse candidate. Activation/restoration are separate confirmed administrator operations with audit and failure retaining the active version. First activation requires a valid candidate, valid chronological evaluation, administrator review and explicit confirmation; with no incumbent, no active-model comparison or invented MAE is used.
 
-- **Dependency**: caller uses another classifier but does not own its lifecycle.
-- **Association**: stable domain link between instances.
-- **Composition**: parent owns nested data or an internal object’s lifecycle.
-- **Inheritance**: concrete Repo extends `BaseRepo<T>`.
-- **Interface realisation**: not used in this canonical version because no provider interface is required by the final decisions. It can be introduced later only with an explicit requirement.
+## 4. Domain associations and storage mappings
 
-For a constructor-injected technical dependency, multiplicity `1` means one required collaborator per object instance. Domain multiplicities describe persisted business relationships.
+```mermaid
+classDiagram
+  class UserProfile
+  class DailyPrediction
+  class ProductionDecision
+  class DailyProduction
+  class DailyResult
+  class SalesTransaction
+  class DailySalesRecord
+  class Donation
+  class WasteRecord
+  class CharityPartner
+  class InventoryBatch
+  class InventoryLog
+  class MlModelVersion
+  class PredictionCalendarEvent
+  class CalendarEvent
+  class Notification
+  class NotificationPreference
+  class FcmToken
+  class NotificationDelivery
+  DailyPrediction "1" --> "0..1" ProductionDecision
+  ProductionDecision "1" --> "0..1" DailyProduction
+  DailyProduction "1" --> "0..1" DailyResult
+  DailyResult "1" --> "0..*" SalesTransaction
+  DailyResult "0..1" --> "0..1" DailySalesRecord : source for simulation-origin only
+  DailyResult "1" --> "0..*" Donation
+  DailyResult "1" --> "0..*" WasteRecord
+  CharityPartner "1" --> "0..*" Donation
+  InventoryBatch "1" --> "0..*" InventoryLog
+  ProductionDecision "0..1" --> "0..*" InventoryLog : production consumption
+  MlModelVersion "0..1" --> "0..*" DailyPrediction : MODEL only
+  DailyPrediction "1" --> "0..*" PredictionCalendarEvent
+  CalendarEvent "1" --> "0..*" PredictionCalendarEvent
+  UserProfile "1" --> "0..*" Notification : recipient
+  UserProfile "1" --> "0..*" NotificationPreference
+  UserProfile "1" --> "0..*" FcmToken
+  Notification "1" --> "0..*" NotificationDelivery
+  FcmToken "0..1" --> "0..*" NotificationDelivery
+```
 
-When a Service merely consumes, creates or returns a DTO/domain object without storing it as an attribute, that relationship is a **dependency**, not lifecycle ownership. In the Repo catalogue, “manages `0..*`” denotes a navigable **association** from one Repo instance to zero or more persisted instances of its bound domain type.
+Unique foreign keys enforce prediction -> decision -> production -> result. Zero-or-one represents prerequisites not yet processed; a committed official simulation creates its production, result and validated simulation history together. `DailySalesRecord` source references are origin-specific; imported history has no invented simulation FK. Model references are mandatory for MODEL and absent for COLD_START. A notification delivery's optional token belongs to the same intended recipient.
 
-## 4. Flutter Views and API client
+The [database catalogue](database_canonical_design.md) contains 29 public tables, one managed `auth.users` dependency and one computed `sales_by_timeslot` view. The catalogue uses controlled text CHECK domains rather than PostgreSQL ENUM types. DB snake_case maps to DTO camelCase (`prediction_mode` -> `predictionMode`, `bread_category_id` -> `breadCategoryId`, `predicted_units_sold` -> `predictedUnitsSold`, `units_sold` -> `unitsSold`, `model_version_id` -> `modelVersionId`, `recipient_user_id` -> `recipientUserId`). Quantity and cost units must be explicit. InventoryLog consumption retains batch links/cost traceability; donation/waste rows obtain category from DailyResult.
 
-These are screen-level classes only. Flutter `State` subclasses, navigation helpers, cards, charts, badges and other small widgets are deliberately excluded.
+## 5. Invariants at service boundaries
 
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `PredictionView` | `<<proposed view>>` | `flutter.presentation` / Presentation | Support the manager’s morning workflow: generate/review a `DailyPrediction`, request a feasible recommendation and confirm the final production decision | `apiClient: ApiClient`; `selectedDate: Date`; displayed prediction/recommendation state | `generatePrediction()`; `loadRecommendation()`; `confirmProductionDecision()` | Has exactly `1` `ApiClient` (**dependency**); displays `0..*` `DailyPrediction` and `0..*` `ProductionRecommendation` DTOs (**dependency**, not ownership of persistent entities) | Core |
-| `ModelManagementView` | `<<proposed view>>` | `flutter.presentation.admin` / Presentation | Allow the System Administrator to initiate training, review origin-labelled evaluation, activate a candidate and restore a previous valid version | `apiClient: ApiClient`; selected model/evaluation state | `trainCandidate()`; `evaluateCandidate()`; `activateCandidate()`; `restoreVersion()` | Has exactly `1` `ApiClient` (**dependency**); displays `0..*` `ModelVersion` and `ModelMetrics` DTOs (**dependencies**) | ML |
-| `InventoryView` | `<<proposed view>>` | `flutter.presentation` / Presentation | Display ingredient/FIFO batch state and initiate authorised restock or discard operations | `apiClient: ApiClient`; inventory display state | `loadInventory()`; `restockIngredient()`; `discardBatch()` | Has exactly `1` `ApiClient` (**dependency**); displays `0..*` `InventoryBatch` DTOs (**dependency**) | Core |
-| `PosSimulationView` | `<<proposed view>>` | `flutter.presentation` / Presentation | Manually start the POS simulation and display produced, sold, leftover and lost-sales results | `apiClient: ApiClient`; `selectedDate: Date`; displayed result state | `runSimulation()`; `loadDailyResults()` | Has exactly `1` `ApiClient` (**dependency**); displays `0..*` `DailyProduction`, `SalesTransaction` and `DailyResult` DTOs (**dependency**) | Core |
-| `LeftoverManagementView` | `<<proposed view>>` | `flutter.presentation` / Presentation | Review remaining unallocated leftovers and let the Bakery Manager confirm donation or waste actions | `apiClient: ApiClient`; `selectedDate: Date`; selected category/allocation state | `loadLeftovers()`; `recordDonation()`; `recordWaste()`; `markDonationStatus()` | Has exactly `1` `ApiClient` (**dependency**); displays `0..*` `DailyResult`, `Donation`, `WasteRecord` and `CharityPartner` DTOs (**dependencies**) | Core |
-| `DashboardView` | `<<proposed view>>` | `flutter.presentation` / Presentation | Present read-only operational, waste, donation and financial summaries | `apiClient: ApiClient`; `period`; displayed summary state | `loadOperationalSummary()`; `loadWasteSummary()`; `loadFinancialSummary()` | Has exactly `1` `ApiClient` (**dependency**); displays aggregated `DailyResult`/`Donation` data (**dependency**) | Core |
-| `ApiClient` | `<<proposed client>>` | `flutter.infrastructure` / Presentation client boundary | Add authentication token, send typed REST requests to Express and map JSON to Dart DTOs | `baseUrl: Uri`; `authTokenProvider`; HTTP client instance | `get<T>()`; `post<T>()`; `put<T>()`; `patch<T>()`; `delete<T>()` | Used by `1..*` Views (**dependency**); sends requests to `0..*` TypeScript Controller endpoints (**cross-process dependency**) | Core |
+- Authorization: JWT plus ACTIVE stored profile precedes permissions. Manager operational actions and administrator management actions are distinct; own-profile edits cannot alter role/status; final active admin survives concurrent changes.
+- RecommendationEngine reserves existing unprocessed commitments, then allocates remaining balances in display order. ProductionDecisionService replaces previous quantities and validates the combined plan; no inventory changes on confirmation.
+- SimulationCommitRepo coordinates one Node-owned PostgreSQL transaction/RPC. Lock/revalidate, consume eligible batches in received_date/id order, then process sales and persist all linked rows; rollback is complete and duplicate calls cannot deduct again. TransactionRecordingService shares this transaction, never independently commits its portion.
+- IngredientCostService reads actual consumed batch quantities and stored unit_cost snapshots, with consistent units. It does not use current ingredient master prices. ReportService preserves signed error/profit and displays zero-denominator percentages as Not Applicable.
+- LeftoverManagementService locks remaining stock and maintains `leftover = donated + wasted + remaining_unallocated`; donations require active charity and waste a reason. PENDING/COLLECTED/COMPLETED/CANCELLED are status concepts; cancellation/reallocation accounting remains open.
+- NotificationRealtimeClient has only recipient-limited authenticated SELECT for foreground notifications; all writes use Node. Push checks preferences and valid recipient tokens and records PENDING/SUBMITTED/DELIVERED/FAILED/SKIPPED accurately.
+- ReportService supplies common filtered calculations to screen and export; daily totals and their detailed transactions are not added together. Simulation provenance is visible.
+- PendingActionService runs on request. No reminder or notification triggers operational actions or training; timed scheduling is future work.
 
-Flutter authentication may use Supabase Authentication for session/JWT issuance, but this is a platform-authentication operation rather than Supabase database access. No Flutter class may query Supabase PostgreSQL tables.
+## 6. Review and implementation order
 
-## 5. TypeScript Controller classes
-
-Express router modules create routes and delegate to these classes. Router modules are not UML classifiers.
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `PredictionController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate prediction requests and delegate manual prediction generation/retrieval | `predictionService: PredictionOrchestrationService` | `generatePrediction(request)`; `getPrediction(date)` | Has exactly `1` `PredictionOrchestrationService` (**dependency**) | Both |
-| `ModelManagementController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate System-Administrator-only training, evaluation, activation, restoration and model-status requests | `modelManagementService: ModelManagementService` | `trainCandidate(request)`; `evaluateCandidate(request)`; `activateCandidate(id)`; `restoreVersion(id)`; `getActiveModels()` | Has exactly `1` `ModelManagementService` (**dependency**) | ML |
-| `RecommendationController` | `<<proposed controller>>` | `backend.controllers` / Application | Delegate recommendation generation and manager decision confirmation | `recommendationEngine: RecommendationEngine`; `decisionService: ProductionDecisionService` | `generateRecommendation(date)`; `confirmProductionDecision(request)`; `getProductionDecisions(date)` | Has `1` `RecommendationEngine` and `1` `ProductionDecisionService` (**dependencies**) | Core |
-| `InventoryController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate and delegate inventory, batch, restock and discard operations | `inventoryService: InventoryService` | `listInventory()`; `listBatches()`; `restock(request)`; `discardBatch(id)` | Has exactly `1` `InventoryService` (**dependency**) | Core |
-| `PosSimulationController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate and delegate manager-initiated simulation and result retrieval | `simulationService: PosSimulationService` | `runSimulation(request)`; `getDailyResults(date)`; `getSales(date)` | Has exactly `1` `PosSimulationService` (**dependency**) | Core |
-| `LeftoverManagementController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate and delegate manager-confirmed leftover, donation and waste operations | `leftoverService: LeftoverManagementService` | `getAllocation(date, categoryId)`; `recommendAction(request)`; `recordDonation(request)`; `recordWaste(request)`; `updateDonationStatus(id, status)` | Has exactly `1` `LeftoverManagementService` (**dependency**) | Core |
-| `ReportController` | `<<proposed controller>>` | `backend.controllers` / Application | Validate weekly-report and supported export requests | `reportService: ReportService` | `getWeeklyReport(weekStart)`; `exportWeeklyReport(weekStart, format)` | Has exactly `1` `ReportService` (**dependency**) | Core |
-| `DashboardController` | `<<proposed controller>>` | `backend.controllers` / Application | Return read-only dashboard summaries | `dashboardService: DashboardService` | `getOperationalSummary(period)`; `getWasteSummary(period)`; `getFinancialSummary(period)` | Has exactly `1` `DashboardService` (**dependency**) | Core |
-
-Controllers contain no Supabase client, SQL/query logic, production calculation, FIFO algorithm, simulation algorithm, model training or external HTTP calls.
-
-## 6. TypeScript Business Service classes
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `PredictionOrchestrationService` | `<<proposed service>>` | `backend.services.prediction` / Business | Assemble validated next-day input from suitable `DailySalesRecord` history and contextual data, call FastAPI, map results to `DailyPrediction`, and persist them | `dailySalesRecordRepo`; `dailyPredictionRepo`; `modelVersionRepo`; `contextService`; `mlClient` | `generatePrediction(targetDate)`; `getPrediction(targetDate)`; `buildPredictionRequest(targetDate)` | Has `1` each `DailySalesRecordRepo`, `DailyPredictionRepo`, `ModelVersionRepo`, `ContextService`, `FastApiMlClient` (**dependencies**); creates `1` `PredictionRequest`; receives `1` `PredictionResponse`; persists `1..*` `DailyPrediction` records | Both |
-| `ModelManagementService` | `<<proposed service>>` | `backend.services.prediction` / Business | Enforce System-Administrator-only model lifecycle: assemble validated `DailySalesRecord`/context data, request candidate training and origin-labelled chronological evaluation, then activate or restore an approved version | `dailySalesRecordRepo`; `weatherRepo`; `calendarRepo`; `modelVersionRepo`; `featureImportanceRepo`; `modelEvaluationRepo`; `mlClient` | `trainCandidate(dateRange, administratorId)`; `evaluateCandidate(modelId, holdoutRange)`; `activateCandidate(modelId, administratorId)`; `restoreVersion(modelId, administratorId)`; `getActiveModels()`; `buildTrainingRequest(dateRange)`; `buildEvaluationRequest(holdoutRange, modelVersions)` | Has exactly `1` of each listed Repo and `1` `FastApiMlClient` (**dependencies**); creates `1` `TrainingRequest` or `EvaluationRequest`; receives `1` `TrainingResult` or `EvaluationResult`; changes activation only after a valid evaluation | ML |
-| `RecommendationEngine` | `<<proposed service>>` | `backend.services.recommendation` / Business | Convert stored predictions, recipes and current usable inventory into feasible production quantities and options | `dailyPredictionRepo`; `recipeRepo`; `inventoryService` | `generateRecommendation(targetDate)`; `calculateRequirements(categoryId, quantity)`; `calculateMaxProducible(requirements)` | Has `1` `DailyPredictionRepo`, `1` `RecipeRepo`, `1` `InventoryService` (**dependencies**); consumes `1..*` `DailyPrediction`; creates `1..*` `ProductionRecommendation` DTOs (**composition of result data**) | Core |
-| `InventoryService` | `<<proposed service>>` | `backend.services.inventory` / Business | Manage usable FIFO batches, restocking, expiry/discard and production deduction/reversal | `inventoryBatchRepo` | `listBatches()`; `getAvailableQuantity(ingredientId, date)`; `restock(request)`; `deductFifo(requirements, date)`; `reverseDeduction(reference)`; `discardBatch(id, reason)` | Has exactly `1` `InventoryBatchRepo` (**dependency**); controls `0..*` `InventoryBatch` records; depends on `0..*` `Recipe`/requirement data | Core |
-| `ProductionDecisionService` | `<<proposed service>>` | `backend.services.recommendation` / Business | Validate final selected quantity, enforce reason/feasibility rules and persist the manager’s decision without deducting inventory | `decisionRepo` | `confirmDecision(command)`; `getDecisions(targetDate)` | Has exactly `1` `ProductionDecisionRepo` (**dependency**); creates or updates `1` `ProductionDecision` for one category/date | Core |
-| `PosSimulationService` | `<<proposed service>>` | `backend.services.pos` / Business | Validate confirmed production/inventory, use the stored `DailyPrediction` as the already-contextualised baseline, and coordinate atomic simulation completion | `dailyPredictionRepo`; `decisionService`; `contextService`; `recordingService` | `simulateDay(targetDate, options)`; `getDailyResults(date)`; `getSales(date)` | Has `1` `DailyPredictionRepo`, `1` `ProductionDecisionService`, `1` `ContextService` (traceability/display only), and `1` `TransactionRecordingService` (**dependencies**); produces `1..*` each `DailyProduction`, `SalesTransaction`, `DailyResult` without reapplying context multipliers | Core |
-| `TransactionRecordingService` | `<<proposed service>>` | `backend.services.pos` / Business | Execute the simulation write unit: deduct FIFO exactly once before sales, persist operational results, create simulation-origin sales history, and reverse/roll back deduction if later processing fails | `dailyProductionRepo`; `salesTransactionRepo`; `dailyResultRepo`; `dailySalesRecordRepo`; `inventoryService` | `recordCompletedSimulation(dayData)`; `reverseFailedSimulation(reference)` | Has exactly `1` of each listed Repo and `1` `InventoryService` (**dependencies**); persists `1..*` production/result/transaction records and exactly `1` `DailySalesRecord` per completed category/day | Core |
-| `LeftoverManagementService` | `<<proposed service>>` | `backend.services.leftover` / Business | Recommend an action, validate available unallocated leftovers, and record only the Bakery Manager’s confirmed donation or waste | `dailyResultRepo`; `charityPartnerRepo`; `donationRepo`; `wasteRepo` | `getAllocation(date, categoryId)`; `recommendAction(request)`; `recordDonation(command)`; `recordWaste(command)`; `updateDonationStatus(id, status)` | Has exactly `1` of each listed Repo (**dependencies**); reads `1` `DailyResult`; creates `0..*` `Donation`/`WasteRecord` while enforcing `donated + wasted ≤ leftover` | Core |
-| `DashboardService` | `<<proposed service>>` | `backend.services.reporting` / Business | Aggregate read-only prediction, production, sales, leftover-allocation, donation, waste and financial summaries | `dailyPredictionRepo`; `dailyResultRepo`; `donationRepo`; `wasteRepo` | `getOperationalSummary(period)`; `getWasteSummary(period)`; `getFinancialSummary(period)` | Has `1` each `DailyPredictionRepo`, `DailyResultRepo`, `DonationRepo`, `WasteRepo` (**dependencies**); reads but never mutates `0..*` domain records | Core |
-| `ReportService` | `<<proposed service>>` | `backend.services.reporting` / Business | Generate weekly reports and delegate supported PDF/CSV rendering | `dailyResultRepo`; `donationRepo`; `wasteRepo`; `exportAdapter` | `generateWeeklyReport(weekStart)`; `exportWeeklyReport(weekStart, format)` | Has `1` each `DailyResultRepo`, `DonationRepo`, `WasteRepo`, `ReportExportAdapter` (**dependencies**); creates exactly `1` weekly report DTO per request | Core |
-| `ContextService` | `<<proposed service>>` | `backend.services.context` / Business | Resolve weather/holiday context from cache or external providers and return a canonical `DailyContext` | `weatherRepo`; `calendarRepo`; `weatherClient`; `calendarClient` | `getContext(date, forceRefresh = false)` | Has `1` each `WeatherRepo`, `CalendarRepo`, `OpenWeatherMapClient`, `NagerDateClient` (**dependencies**); creates `1` `DailyContext` composed of `0..1` `WeatherRecord` and `0..*` `CalendarEvent` | Core |
-
-### Service constraints
-
-- `RecommendationEngine` works only with units, recipe quantities and inventory quantities. It does not depend on selling price, ingredient cost or financial services.
-- `ProductionDecisionService.confirmDecision()` records a decision only. FIFO deduction occurs later during POS simulation.
-- `DashboardService` is read-only with respect to source operational records.
-- `PredictionOrchestrationService` and `ModelManagementService` are the only TypeScript services permitted to call `FastApiMlClient`.
-- FastAPI results are persisted by the TypeScript services through TypeScript Repos.
-- `PosSimulationService` must not multiply the stored prediction by weather, holiday, season or other contextual factors again.
-- `LeftoverManagementService` never creates a donation or waste allocation without Bakery Manager confirmation.
-
-## 7. TypeScript Repo classes
-
-`BaseRepo<T>` is proposed as abstract so it cannot be used without a specific domain/table binding. All Supabase query construction is confined to this package.
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `BaseRepo<T>` | `<<proposed abstract repository>>` | `backend.repos` / Data Access | Provide common typed CRUD and hold the only shared Supabase database client dependency | `tableName: string`; protected `supabaseClient` | `findAll(filters)`; `findOne(id)`; `insert(data)`; `update(id, data)`; `delete(id)` | Parent of `1..*` concrete Repos (**inheritance**); depends on exactly `1` Supabase database client (**dependency**) | Both |
-| `DailyPredictionRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist and retrieve category/date predictions | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `upsertMany(predictions)` | Extends `BaseRepo<DailyPrediction>` (**inheritance**); manages `0..*` `DailyPrediction` | Both |
-| `DailySalesRecordRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/query validated historical sales by date, category and `DataOrigin` for prediction, training and evaluation | Inherited base attributes | Inherited CRUD; `findSuitableHistory(categoryId, beforeDate, limit)`; `findValidatedRange(range, origins?)`; `upsertFromSimulation(result)` | Extends `BaseRepo<DailySalesRecord>` (**inheritance**); manages `0..*` `DailySalesRecord` | Both |
-| `DailyResultRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/query detailed results of completed POS simulations | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `findByDateRange(from,to)`; `updateUnallocatedLeftover(id, quantity)`; `deleteByDate(date)` | Extends `BaseRepo<DailyResult>` (**inheritance**); manages `0..*` `DailyResult` | Both |
-| `RecipeRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Retrieve/update recipe rows with category/ingredient identifiers | Inherited base attributes | Inherited CRUD; `findByCategory(categoryId)`; `findAllWithNames()`; `updateQuantity(categoryId, ingredientId, amount)` | Extends `BaseRepo<Recipe>` (**inheritance**); manages `0..*` `Recipe` | Core |
-| `InventoryBatchRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/query usable FIFO ingredient batches | Inherited base attributes | Inherited CRUD; `findUsableByIngredient(id,date)`; `findExpiringSoon(until)`; `findByReference(reference)` | Extends `BaseRepo<InventoryBatch>` (**inheritance**); manages `0..*` `InventoryBatch` | Core |
-| `ProductionDecisionRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve the manager’s final production choices | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `upsertDecision(decision)` | Extends `BaseRepo<ProductionDecision>` (**inheritance**); manages `0..*` `ProductionDecision` | Core |
-| `DailyProductionRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve actual daily production records | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `upsert(production)`; `deleteByDate(date)` | Extends `BaseRepo<DailyProduction>` (**inheritance**); manages `0..*` `DailyProduction` | Core |
-| `SalesTransactionRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve simulated sales transactions | Inherited base attributes | Inherited CRUD; `insertMany(items)`; `findByDate(date)`; `findByCategory(date,categoryId)`; `deleteByDate(date)` | Extends `BaseRepo<SalesTransaction>` (**inheritance**); manages `0..*` `SalesTransaction` | Core |
-| `CharityPartnerRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve active charity partners | Inherited base attributes | Inherited CRUD; `findActive()` | Extends `BaseRepo<CharityPartner>` (**inheritance**); manages `0..*` `CharityPartner` | Core |
-| `DonationRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve donations and status changes | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `findByDateRange(from,to)`; `updateStatus(id,status)` | Extends `BaseRepo<Donation>` (**inheritance**); manages `0..*` `Donation` | Core |
-| `WasteRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/retrieve manager-confirmed waste allocations | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `findByDateRange(from,to)` | Extends `BaseRepo<WasteRecord>` (**inheritance**); manages `0..*` `WasteRecord` | Core |
-| `WeatherRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Cache canonical weather records by date | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `upsert(record)` | Extends `BaseRepo<WeatherRecord>` (**inheritance**); manages `0..*` `WeatherRecord` | Core |
-| `CalendarRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Cache canonical public-holiday/event records | Inherited base attributes | Inherited CRUD; `findByDate(date)`; `upsertMany(events)` | Extends `BaseRepo<CalendarEvent>` (**inheritance**); manages `0..*` `CalendarEvent` | Core |
-| `ModelVersionRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/read ML model metadata returned by FastAPI | Inherited base attributes | Inherited CRUD; `findActive()`; `activateVersion(id)`; `deactivatePrevious(categoryId)` | Extends `BaseRepo<ModelVersion>` (**inheritance**); manages `0..*` `ModelVersion` | ML |
-| `FeatureImportanceRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist/read ranked feature importance returned by FastAPI | Inherited base attributes | Inherited CRUD; `replaceForModel(modelVersionId, items)`; `findByModelVersion(id)` | Extends `BaseRepo<FeatureImportance>` (**inheritance**); manages `0..*` `FeatureImportance` | ML |
-| `ModelEvaluationRepo` | `<<proposed repository>>` | `backend.repos` / Data Access | Persist origin-labelled chronological-holdout evaluation results | Inherited base attributes | Inherited CRUD; `findByModelVersion(id)`; `insertResult(result)` | Extends `BaseRepo<ModelEvaluation>` (**inheritance**); manages `0..*` `ModelEvaluation` | ML |
-
-Repos for users/access, settings, audit logs, notifications and device tokens remain required by the wider system plan. They are excluded only from these two focused diagrams and must not be removed from implementation planning.
-
-## 8. TypeScript external-service adapter classes
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `FastApiMlClient` | `<<proposed external adapter>>` | `backend.adapters` / Infrastructure | Encapsulate all TypeScript-to-FastAPI HTTP communication and typed DTO serialization | `baseUrl: Uri`; HTTP client; timeout/retry settings | `predict(request: PredictionRequest)`; `train(request: TrainingRequest)`; `evaluate(request: EvaluationRequest)` | Used by exactly `2` selected services: `PredictionOrchestrationService` and `ModelManagementService` (**dependencies**); sends `PredictionRequest`/`TrainingRequest`/`EvaluationRequest` and receives `PredictionResponse`/`TrainingResult`/`EvaluationResult` (**cross-process dependencies**) | Both |
-| `OpenWeatherMapClient` | `<<proposed external adapter>>` | `backend.adapters` / Infrastructure | Retrieve raw weather data and map provider failures to application errors | `baseUrl`; `apiKey`; HTTP client | `fetchWeather(date, location)` | Used by `1` `ContextService` (**dependency**); calls OpenWeatherMap (**external dependency**) | Core |
-| `NagerDateClient` | `<<proposed external adapter>>` | `backend.adapters` / Infrastructure | Retrieve Malaysian public-holiday data and map provider failures | `baseUrl`; `countryCode = "MY"`; HTTP client | `fetchYear(year)` | Used by `1` `ContextService` (**dependency**); calls Nager.Date (**external dependency**) | Core |
-| `ReportExportAdapter` | `<<proposed external adapter>>` | `backend.adapters.reporting` / Infrastructure | Render an already-generated weekly report into a supported PDF or CSV payload without changing source data | supported formats `PDF`, `CSV` | `export(report, format): BinaryPayload` | Used by exactly `1` `ReportService` (**dependency**); depends on a PDF/CSV rendering library hidden from the UML (**external dependency**) | Core |
-
-External adapters never call Repos or Supabase. Services decide caching and call the appropriate Repo.
-
-## 9. Canonical domain models and core DTO
-
-Domain models are pure data structures. Business calculations belong to Services. Operations are therefore limited to construction/serialization and are omitted from the UML operation compartments.
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes only | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `DataOrigin` | `<<proposed enumeration>>` | `shared.domain` / Model | Classify the provenance of a historical daily sales record | `ACTUAL_TRANSACTION`; `IMPORTED_HISTORICAL`; `SIMULATION_GENERATED` | None | Used by every `DailySalesRecord`; included in evaluation origin labels (**dependency**) | Both |
-| `BreadCategory` | `<<proposed domain model>>` | `shared.domain` / Model | Identify one bakery product category | `id`; `name`; `shelfLifeHours`; `isActive`; `sellingPrice` (reporting only) | None | `1` category ↔ `0..*` `Recipe`, `DailyPrediction`, `ProductionDecision`, `DailyProduction`, `SalesTransaction`, `DailyResult` (**associations**) | Core |
-| `Ingredient` | `<<proposed domain model>>` | `shared.domain` / Model | Identify one ingredient and its operational unit | `id`; `name`; `unit`; `reorderThreshold`; `unitCost` (reporting only) | None | `1` ingredient ↔ `0..*` `Recipe`; `1` ingredient ↔ `0..*` `InventoryBatch` (**associations**) | Core |
-| `Recipe` | `<<proposed domain model>>` | `shared.domain` / Model | State the ingredient amount required for one unit of a category | `breadCategoryId`; `ingredientId`; `quantityPerUnit` | None | Each recipe row associates exactly `1` `BreadCategory` and exactly `1` `Ingredient`; each parent has `0..*` recipe rows (**associations**) | Core |
-| `InventoryBatch` | `<<proposed domain model>>` | `shared.domain` / Model | Represent FIFO/expiry-controlled ingredient stock | `id`; `ingredientId`; `receivedDate`; `expiryDate`; `initialQuantity`; `remainingQuantity`; `status`; `source`; `reference` | None | Each batch associates exactly `1` `Ingredient`; one ingredient has `0..*` batches (**association**) | Core |
-| `DailyPrediction` | `<<proposed domain model>>` | `shared.domain` / Model | Persist the predicted next-day units sold for one category | `id`; `targetDate`; `breadCategoryId`; `predictedUnitsSold`; `confidence`; `modelVersionId?`; `createdAt` | None | Each prediction associates exactly `1` `BreadCategory` and `0..1` `ModelVersion`; one prediction has `0..1` `ProductionDecision` and `0..1` `DailyResult` (**associations**) | Both |
-| `ProductionRecommendation` | `<<proposed DTO>>` | `shared.contracts` / Model | Carry the calculated feasible production plan without database identity | `targetDate`; `breadCategoryId`; `predictionId`; `predictedUnitsSold`; `recommendedQuantity`; `maxProducible`; `ingredientRequirements`; `constraints`; `options` | None | Depends on exactly `1` `DailyPrediction`; contains `0..*` requirement/constraint/option value objects (**composition**) | Core |
-| `ProductionDecision` | `<<proposed domain model>>` | `shared.domain` / Model | Persist the manager-confirmed production quantity | `id`; `targetDate`; `breadCategoryId`; `predictionId`; `recommendedQuantity`; `maxProducible`; `finalSelectedQuantity`; `selectedOption`; `decisionReason?`; `confirmedByUserId`; `confirmedAt` | None | Each decision associates exactly `1` `DailyPrediction` and `1` `BreadCategory`; one decision has `0..1` `DailyProduction` (**associations**) | Core |
-| `DailyProduction` | `<<proposed domain model>>` | `shared.domain` / Model | Persist actual simulated production for one category/day | `id`; `productionDate`; `breadCategoryId`; `productionDecisionId`; `recommendedQuantity`; `actualProduced`; `adjustmentReason?` | None | Each record associates exactly `1` `BreadCategory` and `1` `ProductionDecision`; one record has `0..1` `DailyResult` (**associations**) | Core |
-| `SalesTransaction` | `<<proposed domain model>>` | `shared.domain` / Model | Represent one simulated sale event | `id`; `saleDate`; `saleTime`; `timeSlot`; `breadCategoryId`; `quantity`; `unitPrice`; `subtotal` | None | Each transaction associates exactly `1` `BreadCategory`; one category/day has `0..*` transactions (**association**) | Core |
-| `DailyResult` | `<<proposed domain model>>` | `shared.domain` / Model | Persist the detailed result of one completed category/day POS simulation | `id`; `resultDate`; `breadCategoryId`; `predictionId`; `dailyProductionId`; `predictedUnitsSold`; `produced`; `unitsSold`; `leftover`; `remainingUnallocatedLeftover`; `estimatedDemand`; `lostSales`; `wasteRatePct`; `revenue`; `ingredientCost`; `grossProfit` | None | Each result associates exactly `1` `BreadCategory`, `1` `DailyPrediction` and `1` `DailyProduction`; logically aggregates `0..*` `SalesTransaction`; creates exactly `1` simulation-origin `DailySalesRecord` after successful completion (**association/dependency**) | Both |
-| `DailySalesRecord` | `<<proposed domain model>>` | `shared.domain` / Model | Store one validated category/day units-sold observation used by prediction, model training and evaluation | `id`; `salesDate`; `breadCategoryId`; `unitsSold`; `dataOrigin: DataOrigin`; `isValidated`; `sourceReferenceId?`; `createdAt` | None | Each record associates exactly `1` `BreadCategory` and exactly `1` `DataOrigin`; a simulation-generated record references exactly `1` `DailyResult`, while actual/imported records reference `0` `DailyResult` (**associations**) | Both |
-| `CharityPartner` | `<<proposed domain model>>` | `shared.domain` / Model | Identify an approved charity partner | `id`; `name`; `contactInfo?`; `isActive` | None | One partner associates with `0..*` `Donation`; each donation has exactly `1` partner (**association**) | Core |
-| `Donation` | `<<proposed domain model>>` | `shared.domain` / Model | Persist a Bakery-Manager-confirmed surplus donation and fulfilment status | `id`; `donationDate`; `dailyResultId`; `charityPartnerId`; `breadCategoryId`; `quantity`; `status`; `confirmedByUserId`; `notes?` | None | Each donation associates exactly `1` `DailyResult`, `1` `CharityPartner` and `1` `BreadCategory`; each result/category has `0..*` donations (**associations**) | Core |
-| `WasteRecord` | `<<proposed domain model>>` | `shared.domain` / Model | Persist a Bakery-Manager-confirmed disposal allocation with its reason | `id`; `wasteDate`; `dailyResultId`; `breadCategoryId`; `quantity`; `disposalReason`; `confirmedByUserId`; `createdAt` | None | Each waste record associates exactly `1` `DailyResult` and `1` `BreadCategory`; each result/category has `0..*` waste records (**associations**) | Core |
-| `WeatherRecord` | `<<proposed domain model>>` | `shared.domain` / Model | Cache canonical weather context for one date/location | `id`; `date`; `condition`; `temperatureHighC`; `temperatureLowC`; `humidityPct` | None | One `DailyContext` contains `0..1` weather record (**composition in DTO**); Repo manages `0..*` records | Core |
-| `CalendarEvent` | `<<proposed domain model>>` | `shared.domain` / Model | Cache a canonical holiday/event and demand multiplier | `id`; `date`; `eventType`; `eventName`; `demandMultiplier` | None | One `DailyContext` contains `0..*` calendar events (**composition in DTO**) | Core |
-| `DailyContext` | `<<proposed DTO>>` | `shared.contracts` / Model | Carry contextual data used by prediction and simulation | `date`; `weather?`; `calendarEvents` | None | Composes `0..1` `WeatherRecord` and `0..*` `CalendarEvent` (**composition**) | Both |
-| `ModelVersion` | `<<proposed domain model>>` | `shared.domain` / Model | Persist candidate/active/inactive model metadata while the artifact remains in FastAPI storage | `id`; `breadCategoryId`; `version`; `modelType`; `artifactKey`; `lifecycleStatus`; `trainedAt`; `activatedAt?`; `activatedByUserId?` | None | One version associates with exactly `1` `BreadCategory`, `0..*` `DailyPrediction`, `FeatureImportance` and `ModelEvaluation`; at most `1` version per category is active (**associations**) | ML |
-| `FeatureImportance` | `<<proposed domain model>>` | `shared.domain` / Model | Persist one ranked feature-importance value | `id`; `modelVersionId`; `featureName`; `importanceScore`; `rank` | None | Each importance row associates exactly `1` `ModelVersion`; one model version has `0..*` rows (**association**) | ML |
-| `ModelEvaluation` | `<<proposed domain model>>` | `shared.domain` / Model | Persist an origin-labelled evaluation of a model against chronologically later holdout observations | `id`; `modelVersionId`; `holdoutStart`; `holdoutEnd`; `dataOrigins`; `evaluationLabel`; `mae`; `rmse`; `mape`; `rSquared`; `sampleCount`; `mapeSampleCount`; `evaluatedAt` | None | Each evaluation associates exactly `1` `ModelVersion` and `1..*` `DataOrigin` values; one model version has `0..*` evaluations (**associations**) | ML |
-
-### Operational-data rule
-
-`DailyProduction`, `SalesTransaction` and `DailyResult` are the selected model set for the simulation itself:
-
-- `DailyProduction` records what was produced.
-- `SalesTransaction` records simulated sale events.
-- `DailyResult` aggregates category/day outcomes, including `leftover`, `remainingUnallocatedLeftover` and `lostSales`.
-- A successful simulation creates one validated `DailySalesRecord` per category with `dataOrigin = SIMULATION_GENERATED`.
-- `Donation` and `WasteRecord` record only manager-confirmed allocations made after the simulation.
-
-No `SimulationRun` or `LeftoverRecord` classifier is selected. `WasteRecord` is selected because disposal quantity, reason, category and manager confirmation are now explicit requirements.
-
-### Prediction-target rule
-
-`DailySalesRecord.unitsSold` is the current ML target supplied in prediction, training and evaluation data. `DailyResult.lostSales` and `DailyResult.estimatedDemand` remain analytical fields and are not training targets. Simulation-generated history may support development training, but any evaluation containing it must be labelled simulation-based and must not be presented as real-world accuracy.
-
-## 10. Shared Node.js–FastAPI DTO contract
-
-These DTOs define the process boundary. Their schemas are proposed and must be implemented consistently in TypeScript and Python (or generated from one versioned schema). The TypeScript backend validates and supplies the data; FastAPI does not retrieve missing data from Supabase.
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes only | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `PredictionCategoryInput` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Carry validated, category-specific `DailySalesRecord` history and raw context needed for one prediction | `breadCategoryId`; `salesHistory`; `targetDate`; `weather?`; `calendarEvents`; `coldStartConfig` | None | Associates with exactly `1` `BreadCategory`; composes `0..*` dated sales observations with `DataOrigin` and `0..*` context/config values (**association/composition**) | ML |
-| `PredictionRequest` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Request next-day units-sold predictions for one or more categories | `requestId`; `targetDate`; `categoryInputs`; `activeArtifactsByCategory` | None | Composes `1..*` `PredictionCategoryInput` and references `0..1` active model artifact per category (**composition/association**); sent by `FastApiMlClient` to the FastAPI prediction endpoint (**dependency**) | ML |
-| `PredictionResult` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Return one category's predicted units sold, confidence and prediction mode | `breadCategoryId`; `predictedUnitsSold`; `confidence`; `predictionMode`; `modelVersion?`; `warnings` | None | Associates with exactly `1` category identity; composed by exactly `1` `PredictionResponse` (**composition**) | ML |
-| `PredictionResponse` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Return the complete result of a prediction request | `requestId`; `targetDate`; `results`; `generatedAt` | None | Composes `1..*` `PredictionResult` (**composition**); returned by `PredictionService` through FastAPI to `FastApiMlClient` (**dependency**) | ML |
-| `TrainingObservation` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Carry one validated category/day training/evaluation row whose target is units sold | `date`; `breadCategoryId`; `unitsSold`; `dataOrigin`; `weather?`; `calendarEvents`; `laggedUnitsSold` | None | Derived by TypeScript from exactly `1` `DailySalesRecord` plus `DailyContext` (**dependencies**); many observations are composed by training/evaluation requests (**composition**) | ML |
-| `TrainingRequest` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Request category-model training from validated historical observations | `requestId`; `observationsByCategory`; `trainingConfig`; `requestedBy`; `requestedAt` | None | Composes observations for `1..*` categories, with `1..*` `TrainingObservation` per included category (**composition**); sent by `FastApiMlClient` to the FastAPI training endpoint (**dependency**) | ML |
-| `ModelMetrics` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Carry model-quality measurements and their data-origin label for a category/model version | `breadCategoryId`; `modelVersion`; `mae`; `rmse`; `mape`; `rSquared`; `sampleCount`; `mapeSampleCount`; `dataOrigins`; `evaluationLabel` | None | Composed by `TrainingResult` and `EvaluationResult` (**composition**); MAPE excludes only zero-actual observations while MAE/RMSE retain them | ML |
-| `TrainingResult` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Return trained model metadata, evaluation metrics and feature importance | `requestId`; `trainedModels`; `metrics`; `featureImportance`; `completedAt`; `warnings` | None | Composes `1..*` `ModelMetrics` and feature-importance values (**composition**); returned by `ModelTrainingService` to `FastApiMlClient` (**dependency**) | ML |
-| `EvaluationRequest` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Request evaluation of specified candidate/existing model versions against chronologically later validated holdout observations | `requestId`; `modelArtifactsByCategory`; `holdoutObservationsByCategory`; `requestedAt` | None | Composes chronologically ordered observations for `1..*` categories, with `1..*` `TrainingObservation` per category (**composition**); references exactly `1` model artifact per included category (**association**); sent by `FastApiMlClient` to the FastAPI evaluation endpoint (**dependency**) | ML |
-| `EvaluationResult` | `<<proposed DTO>>` | `shared.ml_contracts` / Integration Contract | Return evaluation-only results without changing the active model | `requestId`; `metrics`; `evaluatedAt`; `warnings` | None | Composes `1..*` `ModelMetrics` (**composition**); returned by `ModelEvaluationService` to `FastApiMlClient` (**dependency**) | ML |
-
-The contract intentionally carries raw validated observations and context, not a precomputed feature matrix. `FeaturePreparationService` owns feature derivation, preventing training-serving skew inside the ML service. Validation occurs at both process boundaries: TypeScript validates application and data-availability rules; FastAPI validates DTO shape and ML-specific constraints.
-
-## 11. Python/FastAPI machine-learning classes
-
-FastAPI route functions are thin endpoint functions and are not UML classes. They perform request-schema validation, invoke one service operation and serialize its result. None of the following classifiers depends on Supabase, a TypeScript Repo or a database driver.
-
-| Final canonical name | UML stereotype | Architectural package/layer | Main responsibility | Essential attributes only | Essential operations | Relationships, type and multiplicity | Diagram |
-|---|---|---|---|---|---|---|---|
-| `PredictionService` | `<<proposed service>>` | `ml.services` / ML Application | Select active-model or cold-start mode per category and coordinate feature preparation, artifact loading, prediction and confidence | `featurePreparationService`; `confidenceService`; `coldStartService`; `artifactStore`; `minimumHistoryDays = 30` | `predict(request: PredictionRequest): PredictionResponse` | Depends on exactly `1` `FeaturePreparationService`, `ConfidenceService`, `ColdStartService` and `ModelArtifactStore` (**dependencies**); uses `1` loaded `CategoryPredictor` only when at least `30` suitable records and an active artifact are supplied; consumes/returns prediction DTOs (**dependencies**) | ML |
-| `FeaturePreparationService` | `<<proposed service>>` | `ml.services` / ML Application | Apply one canonical feature definition to prediction and training data | `featureSchemaVersion`; `requiredHistoryDays` | `preparePredictionFeatures(input: PredictionCategoryInput)`; `prepareTrainingFeatures(observations: TrainingObservation[])`; `validateFeatureCompleteness(data)` | Used by `PredictionService` and `ModelTrainingService` (**dependencies**); consumes `1..*` observations and produces feature matrices/value objects (**dependency/composition**) | ML |
-| `ModelTrainingService` | `<<proposed service>>` | `ml.services` / ML Application | Train category-specific models, evaluate them, persist artifacts and return metadata | `featurePreparationService`; `evaluationService`; `artifactStore`; `trainingConfig` | `train(request: TrainingRequest): TrainingResult` | Depends on exactly `1` `FeaturePreparationService`, `1` `ModelEvaluationService` and `1` `ModelArtifactStore` (**dependencies**); creates/trains `1` `CategoryPredictor` per included category (**dependency**); consumes/returns training DTOs (**dependencies**) | ML |
-| `ModelEvaluationService` | `<<proposed service>>` | `ml.services` / ML Application | Evaluate units-sold predictions on chronologically later holdout data and label results by origin | `metricDefinitions`; `artifactStore` | `evaluate(actualUnitsSold, predictedUnitsSold, origins): ModelMetrics`; `evaluateRequest(request: EvaluationRequest): EvaluationResult` | Used by `ModelTrainingService` (**dependency**); depends on exactly `1` `ModelArtifactStore` to load `1` `CategoryPredictor` per requested category (**dependencies**); creates `1` `ModelMetrics` per category/model; excludes zero actuals only from MAPE (**composition**) | ML |
-| `ConfidenceService` | `<<proposed service>>` | `ml.services` / ML Application | Calculate a dedicated model-agreement indicator and expose low-confidence status without claiming a probability formula | configurable `lowConfidenceThreshold = 75%`; unapproved `confidencePolicy` placeholder | `calculateFromTreeVariance(predictor, features): number`; `isLowConfidence(score): boolean` | Used by `PredictionService` (**dependency**); depends on Random Forest tree variance/model agreement from `CategoryPredictor` (**dependency**). The final formula remains unresolved | ML |
-| `ColdStartService` | `<<proposed service>>` | `ml.services` / ML Application | Produce a configurable heuristic prediction when fewer than 30 suitable historical sales records are supplied | `baseUnitsByCategory`; `contextAdjustmentFactors`; `coldStartConfidence`; configuration version | `predict(input: PredictionCategoryInput): PredictionResult`; `canUseTrainedModel(recordCount): boolean` | Used by exactly `1` `PredictionService` (**dependency**); consumes configured values supplied in the request/configuration boundary and returns `1` cold-start `PredictionResult` (**dependency**) | ML |
-| `CategoryPredictor` | `<<proposed model wrapper>>` | `ml.models` / ML Domain | Encapsulate one bread category's random-forest model, linear-regression baseline and feature schema | `breadCategoryId`; `modelVersion`; `featureNames`; `randomForestModel`; `linearRegressionModel` | `train(features, unitsSold)`; `predict(features)`; `predictBaseline(features)`; `getFeatureImportance()` | Created by `ModelTrainingService` and loaded by `PredictionService`/`ModelEvaluationService` (**dependencies**); composes exactly `1` primary estimator and `1` baseline estimator (**composition**). Library estimator classes are excluded from the UML | ML |
-| `ModelArtifactStore` | `<<proposed artifact store>>` | `ml.infrastructure` / ML Infrastructure | Save and load versioned local/deployed model artifacts without database access | `artifactDirectory`; `serializationFormat`; `schemaVersion` | `save(predictor: CategoryPredictor): artifactKey`; `load(artifactKey): CategoryPredictor`; `exists(artifactKey)` | Used by `PredictionService` and `ModelTrainingService` (**dependencies**); stores/loads `0..*` `CategoryPredictor` artifacts (**association**) | ML |
-
-### Thin FastAPI endpoint modules
-
-| Endpoint module operation (not a classifier) | Permitted delegation | Returned contract |
-|---|---|---|
-| `POST /predict` route function | Validate `PredictionRequest` → `PredictionService.predict()` | `PredictionResponse` |
-| `POST /train` route function | Validate `TrainingRequest` → `ModelTrainingService.train()` | `TrainingResult` |
-| `POST /evaluate` route function | Validate `EvaluationRequest` → `ModelEvaluationService.evaluateRequest()` | `EvaluationResult` |
-
-Endpoint functions must not prepare features, train estimators, access artifacts directly or access Supabase.
-
-## 12. Required dependency direction
-
-### Valid call paths
-
-| Scenario | Canonical direction |
-|---|---|
-| Standard mobile operation | Flutter `View` → `ApiClient` → Express router module → Controller → Service → Repo → Supabase |
-| Weather/calendar enrichment | Controller → `ContextService` → `OpenWeatherMapClient`/`NagerDateClient`; `ContextService` → `WeatherRepo`/`CalendarRepo` for cache persistence |
-| Generate predictions | `PredictionController` → `PredictionOrchestrationService` → Repos for validated input → `FastApiMlClient` → thin FastAPI route → Python `PredictionService`; response → `PredictionOrchestrationService` → `DailyPredictionRepo` |
-| Train/evaluate models | `ModelManagementController` → `ModelManagementService` → `DailySalesRecordRepo`/context Repos for validated history → `FastApiMlClient` → thin FastAPI route → `ModelTrainingService`/`ModelEvaluationService`; response → `ModelManagementService` → model metadata/evaluation Repos |
-| Activate/restore model | System Administrator → `ModelManagementController` → `ModelManagementService` → `ModelVersionRepo`; no candidate becomes active automatically |
-| POS simulation | `PosSimulationController` → `PosSimulationService` → `TransactionRecordingService` → FIFO deduction once → operational Repos → `DailySalesRecordRepo`; any later failure reverses/rolls back the deduction |
-| Leftover allocation | Bakery Manager → `LeftoverManagementController` → `LeftoverManagementService` → `DonationRepo`/`WasteRepo`/`DailyResultRepo`; the recommendation itself performs no write |
-
-### Explicitly forbidden dependencies
-
-| Forbidden dependency | Reason |
-|---|---|
-| Flutter View or `ApiClient` → Supabase database | Bypasses application policy and the repository boundary |
-| Controller → Repo, Supabase or external adapter | Skips business orchestration in the Service layer |
-| Service → Supabase client directly | Database access belongs to Repos |
-| Repo → Service or Controller | Reverses the intended dependency direction |
-| External adapter → Repo or Supabase | Adapters isolate external APIs; Services own orchestration and caching decisions |
-| Any Python/FastAPI classifier → Supabase or TypeScript Repo | Node.js/Express is the sole database owner |
-| TypeScript prediction/model Service → FastAPI route directly | All cross-process ML calls must pass through `FastApiMlClient` |
-| FastAPI endpoint function → feature/model/artifact implementation details | Endpoint functions delegate to Python Services |
-
-No interface realisation is selected in this focused proposal. The design uses class inheritance only for `BaseRepo<T>`. Interfaces may be introduced later at test or dependency-inversion boundaries when a concrete substitution requirement is agreed; they should not be added solely to make the UML more elaborate.
-
-## 13. Classifier selection for the Chapter 4 diagrams
-
-The following are the recommended diagram memberships. “Both” means the classifier appears only as a boundary/reference in each diagram; its full details should be shown in the diagram where it is most relevant.
-
-### Core application diagram
-
-| Package/layer | Selected classifiers |
-|---|---|
-| Flutter presentation | `PredictionView`, `InventoryView`, `PosSimulationView`, `LeftoverManagementView`, `DashboardView` |
-| Flutter integration | `ApiClient` |
-| TypeScript controllers | `PredictionController`, `RecommendationController`, `InventoryController`, `PosSimulationController`, `LeftoverManagementController`, `DashboardController`, `ReportController` |
-| TypeScript services | `PredictionOrchestrationService`, `RecommendationEngine`, `InventoryService`, `ProductionDecisionService`, `PosSimulationService`, `TransactionRecordingService`, `LeftoverManagementService`, `DashboardService`, `ReportService`, `ContextService` |
-| Repositories | `BaseRepo<T>`, `DailyPredictionRepo`, `DailySalesRecordRepo`, `DailyResultRepo`, `RecipeRepo`, `InventoryBatchRepo`, `ProductionDecisionRepo`, `DailyProductionRepo`, `SalesTransactionRepo`, `CharityPartnerRepo`, `DonationRepo`, `WasteRepo`, `WeatherRepo`, `CalendarRepo` |
-| External adapters | `FastApiMlClient` as an ML boundary, `OpenWeatherMapClient`, `NagerDateClient`, `ReportExportAdapter` |
-| Core domain/DTO | `DataOrigin`, `BreadCategory`, `Ingredient`, `Recipe`, `InventoryBatch`, `DailyPrediction`, `ProductionRecommendation`, `ProductionDecision`, `DailyProduction`, `SalesTransaction`, `DailyResult`, `DailySalesRecord`, `CharityPartner`, `Donation`, `WasteRecord`, `WeatherRecord`, `CalendarEvent`, `DailyContext` |
-
-For readability, Chapter 4 may collapse related CRUD controllers/Repos into package blocks in the overview and expand only the prediction, recommendation, inventory and simulation collaborations in detailed class diagrams. This is a presentation choice, not a change to the canonical classifier catalogue.
-
-### Machine-learning diagram
-
-| Package/layer | Selected classifiers |
-|---|---|
-| TypeScript ML orchestration | `ModelManagementView`, `PredictionController`, `PredictionOrchestrationService`, `ModelManagementController`, `ModelManagementService`, `FastApiMlClient` |
-| TypeScript persistence boundary | `DailySalesRecordRepo`, `DailyPredictionRepo`, `WeatherRepo`, `CalendarRepo`, `ModelVersionRepo`, `FeatureImportanceRepo`, `ModelEvaluationRepo` |
-| Shared ML contract | `PredictionCategoryInput`, `PredictionRequest`, `PredictionResult`, `PredictionResponse`, `TrainingObservation`, `TrainingRequest`, `ModelMetrics`, `TrainingResult`, `EvaluationRequest`, `EvaluationResult` |
-| Python ML services/infrastructure | `PredictionService`, `FeaturePreparationService`, `ModelTrainingService`, `ModelEvaluationService`, `ConfidenceService`, `ColdStartService`, `CategoryPredictor`, `ModelArtifactStore` |
-| Referenced domain concepts | `DataOrigin`, `BreadCategory`, `DailyPrediction`, `DailySalesRecord`, `DailyContext`, `ModelVersion`, `ModelEvaluation`, `FeatureImportance` |
-
-## 14. Naming migration and exclusions
-
-### Canonical naming
-
-| Earlier or ambiguous term | Final canonical term | Rationale |
-|---|---|---|
-| `DemandPrediction` | `DailyPrediction` | One consistent prediction entity throughout the report |
-| Screen/Page suffix for selected Flutter screens | `View` | One presentation-layer convention |
-| Repository suffix or inconsistent DAO names | `Repo`, including `BaseRepo<T>` | One concise repository convention |
-| Generic TypeScript `PredictionService` | `PredictionOrchestrationService` | Distinguishes Node orchestration from Python model inference |
-| Generic simulation controller/service names | `PosSimulationController` / `PosSimulationService` | Makes the operational scope explicit |
-
-### Excluded from the class diagrams
-
-| Excluded element | Treatment |
-|---|---|
-| Starter Flutter application classes, private `State` classes and small visual widgets | Implementation details; do not show |
-| Express router files | Modules that map HTTP routes to Controller operations; do not model as classes |
-| FastAPI route functions | Thin module-level endpoints; show only as a process boundary or note |
-| Utility functions, configuration objects and dependency-injection bootstrap | Supporting implementation details; do not show |
-| Express, FastAPI, Supabase SDK, Flutter framework and scikit-learn classes | Third-party/framework classifiers; mention only as technology annotations |
-| Every Supabase table | Include only the selected domain concepts and Repos needed for the two architectural stories |
-| `SimulationRun`, `LeftoverRecord` | Not selected because simulation identity/outcome and remaining leftover are represented by `DailyProduction`, `SalesTransaction` and `DailyResult` |
-| User/settings/audit/notification/token classifiers | Preserve in the wider system plan; exclude only from these focused diagrams unless their interactions are being explained |
-
-## 15. Unresolved issues
-
-- Define and version the exact JSON/OpenAPI schemas and decide whether TypeScript/Python DTOs are generated from one source.
-- Finalise the feature list, missing-data policy and mathematical definition/calibration of `confidence`; the history threshold is fixed at fewer than 30 suitable records and the initial low-confidence threshold is configurable at 75%.
-- Decide the production artifact-storage, retention and backup process behind `ModelArtifactStore` and `ModelVersion.artifactKey`; candidate/evaluation/administrator-activation lifecycle rules are resolved.
-- Specify transaction and idempotency rules for POS re-simulation, FIFO inventory deduction and multi-Repo writes.
-- Decide whether foreground notifications use authenticated polling, SSE or a Node.js WebSocket relay; FCM remains the planned background delivery channel and Flutter must not subscribe directly to PostgreSQL changes.
+Follow build modules 0-6 in [the project plan](Final%20Year%20Project/fyp_food_waste.md). Verify shared DTO/storage constraints before UI work, then authorization/administration, ML lifecycle, joint planning, atomic simulation, allocation/reporting and notification integration. [Traceability](planning_documents_change_report.md#requirements-traceability-matrix) maps every BR/FR/NFR to implementation boundaries and planned checks. No implementation or performance claims arise from these diagrams.
