@@ -1,5 +1,7 @@
 # Module 6: Manual Operation Indicators and Testing
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Build order:** seventh, integrating Modules 0–5. **Status:** proposed workflow and test plan, reconciled 2026-10-11 with the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4, 3.4–3.6, 4.2, 4.5, 4.8–4.10. No test results, completed implementation or UAT outcomes are claimed. See the [report mirror](../../RSW_SooKinMin_Project1.docx.md) for navigation.
 
 ## 1. Scope and functional mapping
@@ -13,7 +15,7 @@ The four objectives remain next-day prediction, inventory-aware recommendations,
 1. On opening or refreshing the application, `GET /api/pending-actions` derives current state through `PendingActionController -> PendingActionService -> DailyPredictionRepo/ProductionDecisionRepo/DailyResultRepo` and allocation Repos where needed.
 2. A Bakery Manager explicitly generates the next-day prediction, reviews the shared-ingredient recommendation and confirms a feasible production decision. Confirmation changes no inventory.
 3. For the selected simulation date, defaulting to the current date, the manager explicitly starts official simulation only after a matching stored prediction and confirmed decision exist.
-4. One Node-owned PostgreSQL transaction/RPC locks/revalidates shared inventory, deducts FIFO exactly once and commits all simulation records together; failure rolls back all changes.
+4. One Node-owned PostgreSQL transaction/RPC locks/revalidates shared inventory, deducts FEFO exactly once and commits all simulation records together; failure rolls back all changes.
 5. The manager reviews resulting leftovers and explicitly confirms each donation or waste allocation/status update.
 6. A System Administrator separately initiates candidate training, evaluation, explicit activation or restoration; administrator accounts do not inherit manager actions.
 
@@ -46,7 +48,7 @@ Record measured timings, device/network/dataset conditions and actual UAT partic
 | Access/administration | Valid JWT then active stored profile; cross-role rejection both ways; final active administrator preserved under concurrency; own profile cannot edit role; settings validation and immutable audit |
 | Prediction/history | Exact DataOrigin values; one validated category/day actual → imported → simulation; threshold at 29/30 distinct days; no active model means heuristic; cold-start null confidence/model reference |
 | Confidence/evaluation | Defined tree-agreement boundaries; strict below-75% Low Confidence; chronological untouched holdout; shared RF/LR data; MAE/RMSE/MAPE/R² null semantics; higher-MAE activation rejected |
-| Recommendations/FIFO | Shared ingredient commitments, replacing revisions, excluding processed decisions, display-order allocation, no buffer; receipt order versus expiry order and same-date ID tie-break |
+| Recommendations/FEFO | Shared ingredient commitments, replacing revisions, excluding processed decisions, display-order allocation, no buffer; expiry order versus receipt order; equal expiry uses receipt date, then ID |
 | Simulation | Required stored prediction/manager confirmation; no double-context multipliers; duplicate requests deduct once; locked joint stock; rollback after each mutation point; exact movement costs |
 | Leftovers/reports | Concurrent allocation, positive quantities, active charity/reason, unresolved cancellation blocked; signed error, real discarded waste, negative profit, Not Applicable denominators; CSV/PDF/UI parity |
 | Notifications | Recipient isolation through Node and Realtime; read/dedup per user; type opt-in and token ownership; delivery state evidence; push failure retains in-app record |

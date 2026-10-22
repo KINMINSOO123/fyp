@@ -1,5 +1,7 @@
 # Smart Bakery project plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Reconciled on 2026-10-11 against the latest **RSW_SooKinMin_Project1** DOCX, especially Sections 1.1, 1.4, 3.4-3.6 and Chapter 4. The repository report mirror is [RSW_SooKinMin_Project1.docx.md](../RSW_SooKinMin_Project1.docx.md). The DOCX governs if the mirror differs. The user-deleted `FYP Report.md` remains deleted. Earlier July 2026 planning claims do not establish approval of this design.
 
 This is a proposed design. The repository contains a Flutter counter starter and planning documents; backend, ML, database, reports and test outcomes described here are not implemented or verified.
@@ -19,7 +21,7 @@ The eight functional modules in Section 1.4.2 and the seven technical build modu
 | 1 User and Access Management | Login/logout, own profile, one stored role, active account, administrator user management | 0 data foundation; 1 Node middleware; 5 mobile views; 6 verification |
 | 2 Demand Prediction | Validated history, context, model/cold start, confidence, administrator model lifecycle | 0; 1; 2 ML prediction; 5; 6 |
 | 3 Inventory and Smart Production Recommendation | Admin master data/batches; manager jointly feasible production plan | 0; 1; 3 inventory integration; 5; 6 |
-| 4 POS and Sales Simulation | Confirmed production, atomic FIFO deduction, simulated sales/history | 0; 1; 3; 4 POS simulation; 5; 6 |
+| 4 POS and Sales Simulation | Confirmed production, atomic FEFO deduction, simulated sales/history | 0; 1; 3; 4 POS simulation; 5; 6 |
 | 5 Leftover, Donation and Waste Management | Confirmed allocation, charity administration, donation status | 0; 1; 5 donation/dashboard; 6 |
 | 6 Reporting and Dashboard | Role-specific summaries and filtered on-demand CSV/PDF exports | 0; 1; 4; 5; 6 |
 | 7 Alerts and Notifications | Recipient-only foreground Realtime, opt-in FCM, pending indicators | 0; 1; 3; 4; 5; 6 operation reminders/testing |
@@ -63,7 +65,7 @@ Cold start has no numeric confidence setting. UI, DTOs and SQL must retain null 
 
 Administrator training creates an inactive candidate. Evaluation uses chronologically later holdout observations unused in fitting or parameter selection; Random Forest and Linear Regression use identical training/test data. Store MAE, RMSE, MAPE, R^2, sample counts, periods and origin composition. Exclude zero actuals only from MAPE; unavailable MAPE/R^2 or an empty comparison are not perfect scores. Activation and restoration require separate explicit administrator actions. NFR-ACC-05 rejects activation if candidate MAE exceeds active-model MAE on the same later test set; failure retains the active model. MAPE <10% and R^2 >0.85 are, at most, optional aspirations, not acceptance gates or achieved results.
 
-## 4. Joint production planning and FIFO
+## 4. Joint production planning and FEFO
 
 The [inventory plan](inventory_integration/README.md) applies Section 4.9.3 across the full selected-date plan:
 
@@ -75,7 +77,7 @@ The [inventory plan](inventory_integration/README.md) applies Section 4.9.3 acro
 
 Confirmation records the manager's decision/reason and changes no inventory. Recommendations never add a production buffer above predicted sales. A manager may override with a reason only when the combined plan remains feasible.
 
-FIFO excludes inactive/expired/future-received batches and orders valid batches by `received_date ASC, id ASC`. Expiry is an eligibility check, not the sort key. Receipt-first and expiry-first can differ: an older receipt expiring later must be consumed before a newer receipt expiring sooner.
+FEFO excludes inactive/expired/future-received batches and orders valid batches by `expiry_date ASC, received_date ASC, id ASC`. Expiry determines eligibility and consumption order. A newer receipt expiring sooner is consumed before an older receipt expiring later; equal expiry dates use receipt date, then ID.
 
 ## 5. Manual operational workflow and atomic simulation
 
@@ -83,7 +85,7 @@ Users open/refresh the application to obtain pending-action indicators. There ar
 
 The manager manually generates the next-day prediction, reviews jointly feasible recommendations and explicitly confirms quantities. Official simulation defaults to the current date and requires that selected date's stored prediction and confirmed decisions. It cannot use a fallback recommendation or a client-produced override.
 
-[POS plan](pos_simulation/README.md): one Node-owned PostgreSQL transaction/RPC locks the date's decisions, recipes/stock as needed, and valid batches in consistent order; revalidates combined stock while preserving other outstanding commitments; deducts FIFO exactly once before sales processing; and commits batch/snapshot changes, inventory movements, `DailyProduction`, `SalesTransaction`, `DailyResult` and one validated simulation-origin `DailySalesRecord` per category together. Any failure rolls back everything. Unique prediction -> decision -> production -> result links and locked duplicate checks prevent a retried/concurrent request from deducting twice. RPC inputs are authorized server inputs, never trusted client feasibility/actor claims.
+[POS plan](pos_simulation/README.md): one Node-owned PostgreSQL transaction/RPC locks the date's decisions, recipes/stock as needed, and valid batches in consistent order; revalidates combined stock while preserving other outstanding commitments; deducts FEFO exactly once before sales processing; and commits batch/snapshot changes, inventory movements, `DailyProduction`, `SalesTransaction`, `DailyResult` and one validated simulation-origin `DailySalesRecord` per category together. Any failure rolls back everything. Unique prediction -> decision -> production -> result links and locked duplicate checks prevent a retried/concurrent request from deducting twice. RPC inputs are authorized server inputs, never trusted client feasibility/actor claims.
 
 Simulation uses the stored contextualised prediction as baseline with configured time-slot/stochastic variation. Weather/holiday/season context remains traceable but is not multiplied again. `units_sold <= produced`; `lost_sales = max(0, demand - produced)`; `estimated_demand = units_sold + lost_sales`; `leftover = produced - units_sold`. Isolated test scenarios are not persisted operational actions. Re-simulation with exact original batch movement/history reversal is future work; there is no current force-refresh or correction-batch recovery path. No `SimulationRun` or `LeftoverRecord` table is added.
 
@@ -101,7 +103,7 @@ gross_profit = revenue - ingredient_cost
 gross_profit_margin_pct = gross_profit / revenue * 100
 ```
 
-Cost uses actual FIFO consumption with batch cost snapshots and consistent units, including ingredients used for unsold production. Master-price changes cannot rewrite history. Transaction unit prices are snapshots. Signed prediction errors and negative profit/margin are valid. Zero-denominator percentages display Not Applicable. Actual discarded waste is separate from donated/unallocated leftovers. Detailed transactions and daily totals are alternate aggregation levels, not additive sources.
+Cost uses actual FEFO consumption with batch cost snapshots and consistent units, including ingredients used for unsold production. Master-price changes cannot rewrite history. Transaction unit prices are snapshots. Signed prediction errors and negative profit/margin are valid. Zero-denominator percentages display Not Applicable. Actual discarded waste is separate from donated/unallocated leftovers. Detailed transactions and daily totals are alternate aggregation levels, not additive sources.
 
 Donation workflow uses `PENDING -> COLLECTED -> COMPLETED`; `CANCELLED` is a recognized status whose cancellation/reallocation policy remains an explicit open decision. Status changes have a dedicated endpoint, confirmation and audit. No donation is automatic. See [donation/report plan](donation_dashboard/README.md).
 
@@ -117,7 +119,7 @@ All steps remain future implementation work:
 2. Module 1: authentication/active-profile authorization, administration, audited settings, Repos/adapters and shared contracts; no provider secrets in settings or client code.
 3. Module 2: validated origin-prioritized history, features, cold start/confidence, candidate training/evaluation/explicit activation.
 4. Module 3: master-data operations, dated inventory, joint recommendations and confirmed decisions.
-5. Module 4: atomic FIFO simulation and validated historical handoff, including duplicate/failure behavior.
+5. Module 4: atomic FEFO simulation and validated historical handoff, including duplicate/failure behavior.
 6. Module 5: Flutter role views, transactional leftovers, status, dashboards and filtered reports/exports.
 7. Module 6: recipient event notifications, manual pending indicators and cross-module acceptance checks (planned continuously as each dependency becomes available).
 

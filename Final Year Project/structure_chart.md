@@ -1,5 +1,7 @@
 # Smart Bakery functional structure chart
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Current planning revision: 2026-10-11. The previous July 2026 chart is a historical planning snapshot, not current approval. Source: [latest report](../RSW_SooKinMin_Project1.docx.md), Sections 1.1, 1.4.2, 4.2, 4.5, 4.7-4.9 and Table 4.27; DOCX takes precedence. Every branch below is proposed.
 
 ## Eight functional modules
@@ -22,7 +24,7 @@ flowchart TD
   I --> I2[Joint temporary balance; confirmed commitments; display-order allocation]
   I --> I3[Manager confirms feasible quantity and override reason]
   X --> X1[Selected-date prediction and confirmed decision required]
-  X --> X2[Atomic receipt-order FIFO; sales; results; validated simulation history]
+  X --> X2[Atomic expiry-order FEFO; sales; results; validated simulation history]
   L --> L1[Manager-confirmed positive donation or waste]
   L --> L2[Active charity / disposal reason; locked remaining balance]
   L --> L3[Donation status and audit; cancellation policy open]
@@ -47,7 +49,7 @@ flowchart LR
   B --> C[Manager confirms production]
   C --> T[Manager requests current or selected date simulation]
   T --> V[Lock; verify prediction and confirmed plan; revalidate ingredients]
-  V --> F[Deduct received_date then id FIFO]
+  V --> F[Deduct expiry_date then received_date then id FEFO]
   F --> D[Process simulated sales from stored prediction baseline]
   D --> K[Commit production / transactions / results / origin-labelled history together]
   K --> L[Manager confirms donation or waste allocation]
@@ -67,7 +69,7 @@ Confirmation does not deduct stock. Temporary recommendations reserve each alloc
 | 0 Data Foundation | [data_foundation](data_foundation/MODULE.md) | 1-8 persistence and contracts |
 | 1 Node.js Middleware | [nodejs_middleware](nodejs_middleware/MODULE.md) | 1-8 authorization, Controllers/Services/Repos/adapters |
 | 2 ML Prediction | [ml_prediction](ml_prediction/MODULE.md) | 2; 8 model governance |
-| 3 Inventory Integration | [inventory_integration](inventory_integration/MODULE.md) | 3; 4 FIFO; 7 stock/expiry events |
+| 3 Inventory Integration | [inventory_integration](inventory_integration/MODULE.md) | 3; 4 FEFO; 7 stock/expiry events |
 | 4 POS Simulation | [pos_simulation](pos_simulation/MODULE.md) | 4; 2 validated simulation history; 6; 7 |
 | 5 Donation Dashboard | [donation_dashboard](donation_dashboard/MODULE.md) | 5; 6; role-specific UI for 1-8 |
 | 6 Operation Reminders and Testing | [operation_reminders_testing](operation_reminders_testing/MODULE.md) | 7 request-derived pending indicators; planned verification of 1-8 |

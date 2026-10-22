@@ -1,5 +1,7 @@
 # Smart Bakery Logical View audit and diagram plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 ## Historical audit snapshot
 
 The earlier planning audit, associated with the July 2026 planning set, found only the Flutter counter starter (`lib/main.dart`, `test/widget_test.dart`) and no Smart Bakery TypeScript backend, Python ML service, schema migrations or generated database types. That finding is historical evidence, not an approval of the proposed backend. This file did not establish a precise original audit date; none is invented here. The separately dated database audit remains labelled 31 July 2026 in [database_schema_verification.md](database_schema_verification.md).
@@ -29,10 +31,10 @@ The platform exception diagram must show Supabase Authentication, foreground rec
 2. Trace manager-only operations separately from administrator management; both roles retain own-profile/personal-notification and permitted-report access. Verify stored single role/ACTIVE status and final-admin protection.
 3. Show stored prediction -> confirmed decision -> production -> result uniqueness, source-specific DailySalesRecord relationships, and normalized allocation links. Do not add SimulationRun or LeftoverRecord.
 4. Show RecommendationEngine reading stored predictions and accounting for shared ingredients/commitments; it does not invoke ML. Confirmed decisions have no inventory-deduction association until processing.
-5. Show SimulationCommitRepo as a single atomic transaction boundary covering FIFO inventory movements and all operational/history writes. Receipt order is received_date then id, with eligibility excluding expired/inactive batches. No independent commits or correction-batch recovery arrows.
+5. Show SimulationCommitRepo as a single atomic transaction boundary covering FEFO inventory movements and all operational/history writes. Consumption order is expiry_date then received_date then id, with eligibility excluding expired/inactive batches. No independent commits or correction-batch recovery arrows.
 6. Check DTO MODEL requires numeric confidence/modelVersionId; COLD_START has both null. ConfidenceService owns the report formula. History uses distinct validated category/day unitsSold with exact origin priority; training/evaluation/activation/restoration are distinct.
 7. Check notification recipient/preferences/token/delivery relationships and delivery states; all mark-read/write paths use Node. PendingActionService has request-time dependencies, no timer/scheduler.
-8. Trace ReportService/ReportRepo/ReportExportAdapter for common CSV/PDF/UI calculations, simulation labels, FIFO cost snapshots, signed error/profit and Not Applicable percentages.
+8. Trace ReportService/ReportRepo/ReportExportAdapter for common CSV/PDF/UI calculations, simulation labels, FEFO cost snapshots, signed error/profit and Not Applicable percentages.
 9. Show manager-confirmed donation/waste and dedicated status updates; cancellation/reallocation semantics remain an open decision, not an invented transition policy.
 10. Once actual implementation exists, compare declarations, signatures, dependency injection, FK constraints and real tests to these diagrams. Until then record checks as design review/planned validation rather than implementation verification.
 

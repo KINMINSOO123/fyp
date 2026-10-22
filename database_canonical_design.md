@@ -1,5 +1,7 @@
 # Smart Bakery Database Canonical Design
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Status:** PLANNED CANONICAL DESIGN — NOT IMPLEMENTED
 **Historical design snapshot:** 31 July 2026; reconciled 11 October 2026
 **Chapter target:** Chapter 4.5.2 Entity-Relationship Diagram
@@ -78,7 +80,7 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Catalogue | `ingredients` | Soft-deactivatable ingredient master and current reporting cost |
 | Catalogue | `recipes` | Bread-category/ingredient junction with grams per unit |
 | Inventory | `inventory` | Cached current ingredient quantity |
-| Inventory | `inventory_batches` | FIFO/expiry lots and received unit-cost snapshot |
+| Inventory | `inventory_batches` | FEFO/expiry lots and received unit-cost snapshot |
 | Inventory | `inventory_log` | Batch-level stock movements grouped by an operation UUID |
 | Context | `weather_records` | Normalized daily weather cache |
 | Context | `calendar_events` | Normalized holiday/event cache |
@@ -241,7 +243,7 @@ Status consistency:
 - `ACTIVE` requires `remaining_quantity_grams > 0`; and
 - expired/discarded rows cannot be selected by the production-deduction RPC.
 
-Valid batches must be `ACTIVE`, received by the production date and not expired on that date. This plan uses `received_date <= production_date` and `expiry_date >= production_date`, treating the printed expiry date as the last usable date. Select valid batches in ascending `received_date, id` order; expiry filters eligibility and does not determine FIFO ordering. On each relevant request, reconcile expired status/available balances without a scheduled job. Cached inventory never replaces date-specific batch eligibility checks.
+Valid batches must be `ACTIVE`, received by the production date and not expired on that date. This plan uses `received_date <= production_date` and `expiry_date >= production_date`, treating the printed expiry date as the last usable date. Select valid batches in ascending `expiry_date, received_date, id` order; expiry determines eligibility and is the primary FEFO sort key. On each relevant request, reconcile expired status/available balances without a scheduled job. Cached inventory never replaces date-specific batch eligibility checks.
 
 #### `inventory_log`
 
@@ -497,7 +499,7 @@ UNIQUE (`production_date`, `bread_category_id`) and UNIQUE (`id`, `production_da
 | `sales_prediction_error` | `integer` | Generated/stored | `units_sold - predicted_units_sold`; signed |
 | `notes` | `text` | NULL | — |
 | `revenue` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `revenue >= 0`; transactionally verified sales subtotal cache |
-| `ingredient_cost` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `ingredient_cost >= 0`; sum actual FIFO consumption at immutable batch cost snapshots |
+| `ingredient_cost` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `ingredient_cost >= 0`; sum actual FEFO consumption at immutable batch cost snapshots |
 | `gross_profit` | `numeric(14,2)` | Generated/stored | `revenue - ingredient_cost`; may be negative |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
@@ -720,7 +722,7 @@ PK and UNIQUE constraints create implicit unique indexes. The following addition
 | `ingredients` | PK; UNIQUE (`name`); `idx_ingredients_active(is_active, name)` |
 | `recipes` | PK; UNIQUE (`bread_category_id`, `ingredient_id`); `idx_recipes_ingredient(ingredient_id)` |
 | `inventory` | PK; UNIQUE (`ingredient_id`) |
-| `inventory_batches` | PK; `idx_inventory_batches_fifo(ingredient_id, received_date, id) WHERE status = 'ACTIVE'`; `idx_inventory_batches_expiry(status, expiry_date)` |
+| `inventory_batches` | PK; `idx_inventory_batches_fefo(ingredient_id, expiry_date, received_date, id) WHERE status = 'ACTIVE'`; `idx_inventory_batches_expiry(status, expiry_date)` |
 | `inventory_log` | PK; `idx_inventory_log_operation(operation_id)`; `idx_inventory_log_inventory_date(inventory_id, effective_date)`; `idx_inventory_log_batch(batch_id)`; `idx_inventory_log_decision(production_decision_id)` |
 | `weather_records` | PK; UNIQUE (`weather_date`)—no redundant second date index |
 | `calendar_events` | PK; UNIQUE (`event_date`, `event_type`, `event_name`); `idx_calendar_events_date(event_date)` |
@@ -820,7 +822,7 @@ The `sales_by_timeslot` view uses security-invoker behaviour and remains accessi
 
 For example, 1,000 g flour with two 100 g/unit categories and predictions of 8 each yields 8 then 2 in display order, not 8 plus 8. If category one already has 6 confirmed units, reserve 600 g first and recommend at most 4 for category two. Once category one is processed, its original 600 g is already deducted and is not reserved again.
 
-### 9.1 POS completion/FIFO RPC
+### 9.1 POS completion/FEFO RPC
 
 The canonical Node-owned PostgreSQL transaction/RPC is `complete_pos_simulation`. The name specifies a design contract, not an implemented function.
 
@@ -831,7 +833,7 @@ One call covers the selected business date and all included categories so the si
 3. It locks the relevant decisions, inventory snapshots and usable batches using row locks.
 4. It recalculates combined ingredient requirements of all outstanding decisions, including commitments outside the requested subset, and validates the selected confirmed quantities; processed decisions are excluded.
 5. It rejects expired/inactive/unreceived batches and validates enough usable stock before writing anything. Inventory locks use a consistent ingredient order to prevent concurrent overspending.
-6. It deducts selected decisions exactly once in ascending `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with shared `operation_id` and decision ID. Only then does sales processing apply time-slot/stochastic variation around the stored contextualised prediction, without multiplying weather/holiday/season effects again.
+6. It deducts selected decisions exactly once in ascending `expiry_date`, `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with shared `operation_id` and decision ID. Only then does sales processing apply time-slot/stochastic variation around the stored contextualised prediction, without multiplying weather/holiday/season effects again.
 7. It inserts one `daily_production` per decision and one `daily_results` per production, initializing remaining unallocated leftover to generated leftover.
 8. It inserts all `sales_transactions` under their `daily_result_id` and verifies each result's `units_sold` and revenue against those transactions.
 9. It inserts exactly one validated `daily_sales_records` row per result with `data_origin = 'SIMULATION_GENERATED'` and the matching `source_daily_result_id`.
@@ -908,7 +910,7 @@ The following are not tables:
 | PDF/CSV payload | Export adapter output |
 | `RandomForestModel` and `LinearRegressionModel` artifacts | FastAPI-managed files; only `artifact_key` and metadata persist |
 | Cold-start output | Prediction DTO/result stored only as `daily_predictions` |
-| FIFO calculation/deduction response | RPC/service result; movements persist in `inventory_log` |
+| FEFO calculation/deduction response | RPC/service result; movements persist in `inventory_log` |
 | `SimulationRun` | Excluded; `operation_id` is only an idempotency/grouping value |
 | `LeftoverRecord` | Excluded; leftover state belongs to `daily_results` |
 | `sales_by_timeslot` | Computed PostgreSQL view, not a base table |
@@ -1314,7 +1316,7 @@ erDiagram
 | 4. Notification targeting, preferences and delivery persistence | Added recipient to `notifications`, composite `notification_preferences`, per-user `fcm_tokens`, and normalized per-device `notification_deliveries` with the five required statuses and provider/timestamp/failure details. |
 | 5. Sales source-reference semantics | Replaced the overloaded UUID with `source_daily_result_id` and `external_source_reference`; added origin-specific CHECKs, partial uniqueness and matching date/category composite FK. |
 | 6. Prediction/calendar reproducibility | Added `prediction_calendar_events` as the exact many-to-many junction. |
-| 7. Node/Supabase transaction mechanism | One Node-owned PostgreSQL transaction/RPC commits FIFO, batch/snapshot/movement updates, production, sales, result and generated history together (§4.5.4); `SimulationCommitRepo` coordinates it. |
+| 7. Node/Supabase transaction mechanism | One Node-owned PostgreSQL transaction/RPC commits FEFO, batch/snapshot/movement updates, production, sales, result and generated history together (§4.5.4); `SimulationCommitRepo` coordinates it. |
 | 8. Inventory reversal traceability | `operation_id` groups movements; failed simulation rolls back. Re-simulation is future work pending an exact-batch/linked-history atomic policy; no `SimulationRun` table (§4.5.2). |
 | 9. Error and leftover-rate semantics | `sales_prediction_error = units_sold - predicted_units_sold`; signed values allowed. Leftover rate is not discarded-waste rate; zero denominator is Not Applicable (§§4.5.3–4.5.4, 4.7). |
 | 10. Allowed values and ranges | Defined the controlled values in Section 3, non-blank free text for disposal/location descriptions, and explicit quantity/date/confidence/evaluation checks. |
@@ -1326,9 +1328,9 @@ erDiagram
 | One active model | Partial unique index; separate training/evaluation/explicit activation/restoration; reject higher MAE on identical untouched chronological holdout (NFR-ACC-05). |
 | FastAPI database boundary | Retained DTO-only FastAPI input/output; Node alone persists Supabase data. |
 | Nullable cold start and model confidence | MODEL numeric tree-agreement confidence; COLD_START null with low-confidence heuristic label; 30 distinct selected daily observations and valid active RF gate (§§4.5.3–4.5.4, 4.9.2, NFR-ACC-08). |
-| Joint ingredient feasibility and FIFO | Reserve outstanding decisions, allocate unconfirmed categories in display order, validate revisions jointly; consume valid batches by receipt date then ID (§4.9.3). |
+| Joint ingredient feasibility and FEFO | Reserve outstanding decisions, allocate unconfirmed categories in display order, validate revisions jointly; consume valid batches by expiry date, then receipt date, then ID (user FEFO revision of §4.9.3). |
 | Foreground notifications | Narrow authenticated recipient-only Realtime SELECT policy; all writes/read-state changes use Node (§§4.2.4, 4.8). |
-| Cost and export reproducibility | Actual FIFO batch unit-cost snapshots and sale unit-price snapshots; consistent manually requested UI/CSV/PDF calculations (§4.7). |
+| Cost and export reproducibility | Actual FEFO batch unit-cost snapshots and sale unit-price snapshots; consistent manually requested UI/CSV/PDF calculations (§4.7). |
 | Donation statuses | PENDING/COLLECTED/COMPLETED/CANCELLED; cancellation/reallocation semantics remain open (§§1.4.2, 4.5). |
 
 The 31 July 2026 design date records a historical planning snapshot, not approval over the latest DOCX. Reconciliation began 11 October 2026; final documentation review was 12 October 2026. Cancellation/reallocation policy is still a material open decision; executable migrations, transaction bodies, generated types and measured verification remain future implementation work. This document supplies a design, not completed implementation/testing chapters.

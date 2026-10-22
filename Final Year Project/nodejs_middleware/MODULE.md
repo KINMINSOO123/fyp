@@ -1,5 +1,7 @@
 # Module 1: Node.js Middleware and External Adapters
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Build order:** second, after Module 0. **Status:** proposed design reconciled on 2026-10-11; backend components and checks below are not implemented or verified. The latest `RSW_SooKinMin_Project1 (1).docx` is the authority; the repository [report mirror](../../RSW_SooKinMin_Project1.docx.md) supports navigation. See report Sections 3.4–3.6, 4.2, 4.5, 4.8 and 4.9.
 
 ## 1. Responsibility and functional-module mapping
@@ -51,7 +53,7 @@ Inventory/category/recipe/batch management belongs to the administrator. Manager
 - MODEL predictions require at least 30 distinct validated daily observations and a valid active model. They have a model-version reference and numerical confidence. `ConfidenceService` calculates `100 * max(0, min(1, 1 - sigma / max(abs(mu), 1)))`; `predicted_units_sold = max(0, round(mu))`. Confidence below the configurable threshold, initially 75%, is Low Confidence; it measures tree agreement, not accuracy probability.
 - COLD_START predictions have `modelVersionId = null`, `confidence = null` and a low-confidence heuristic label. Use the mean available valid units sold as `Bc`, otherwise the category's configured base; predict `max(0, round(Bc * Dt * Mt * Wt * Ht))`.
 - Recommendations reserve outstanding confirmed decisions against a temporary balance, then allocate unconfirmed categories in ascending `display_order`. Each recommendation is `min(predicted_units_sold, max_producible)` and reduces remaining shared balances. Revising a decision replaces its old quantity; processed decisions are excluded. Confirmation changes no inventory.
-- Official simulation requires the selected date's stored prediction and manager-confirmed decision. One Node-owned transaction/RPC revalidates combined availability, locks rows, deducts valid batches in `received_date, id` order, and commits inventory, movements, production, transactions, result and one validated simulation-origin observation together. Failure rolls back everything; uniqueness and locks prevent duplicate deduction. Stored contextual effects are not applied again.
+- Official simulation requires the selected date's stored prediction and manager-confirmed decision. One Node-owned transaction/RPC revalidates combined availability, locks rows, deducts valid batches in `expiry_date, received_date, id` order, and commits inventory, movements, production, transactions, result and one validated simulation-origin observation together. Failure rolls back everything; uniqueness and locks prevent duplicate deduction. Stored contextual effects are not applied again.
 - Model candidates and active models are compared on the same chronologically later untouched test dataset. Reject activation if candidate MAE is higher; preserve the active model on failures. RF/LR share training/test data; report MAE, RMSE, MAPE and R² with undefined values unavailable, not perfect.
 
 ## 5. Notification and platform contracts

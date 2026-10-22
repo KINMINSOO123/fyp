@@ -1,5 +1,7 @@
 # Smart Bakery Database Schema Verification Plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Historical audit snapshot:** 31 July 2026. **Current reconciliation:** 11 October 2026.
 **Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 4.5.1-4.5.4, 4.7-4.9 and Chapter 3 BR/FR/NFR tables. The repository [report mirror](RSW_SooKinMin_Project1.docx.md) is a reading aid; the DOCX controls requirements.
 **Status:** documentation review and future verification plan; no database functionality or test pass is claimed.
@@ -67,18 +69,18 @@ These checks are to run after implementation; all are currently **PLANNED**.
 | DB-12 | Two categories each request 8 units, flour 1,000 g, each needs 100 g | Display-order recommendations 8 then 2; no double allocation or automatic buffer |
 | DB-13 | Confirmed outstanding 6 units; revise to 4; another category shares flour | Replace 6 with 4, recalculate remaining availability; confirmation changes no stock; processed decisions not reserved again |
 | DB-14 | Commitments exceed stock after a stock change; concurrent confirmations | Explain ingredient shortages and reject infeasible plan; joint validation/locking prevents overspending |
-| DB-15 | Batch A received 1 Oct, expires 20 Oct; B received 2 Oct, expires 15 Oct; produce 10 Oct | Consume A first despite B expiring earlier; equal receipt dates use ascending ID; expired/inactive/unreceived batches excluded |
+| DB-15 | Batch A received 1 Oct, expires 20 Oct; B received 2 Oct, expires 15 Oct; produce 10 Oct | Consume B first because it expires earlier; equal expiry dates use receipt date, then ID; expired/inactive/unreceived batches excluded |
 | DB-16 | Official simulation lacks stored selected-date prediction or manager confirmation | Reject; current date default, no recommended-quantity fallback or producedOverride bypass |
 | DB-17 | Known contextual prediction, simulation with weather/holiday/season factors | Use stored baseline plus time-slot/stochastic variation; do not multiply those factors again |
 | DB-18 | Duplicate or concurrent simulation requests for same decisions | One completed operational chain; duplicate returns 409 ALREADY_SIMULATED with stored-result link and zero second deduction |
-| DB-19 | Fail after FIFO, snapshot/log changes, production, sales, result or history insert | Roll back all batch/snapshot/movement/production/sales/result/history changes; no correction-batch recovery |
+| DB-19 | Fail after FEFO, snapshot/log changes, production, sales, result or history insert | Roll back all batch/snapshot/movement/production/sales/result/history changes; no correction-batch recovery |
 | DB-20 | Leftover 10, concurrent donation 7 and waste 5 | Lock result; accept only feasible allocation; maintain leftover = donated + wasted + remaining_unallocated |
 | DB-21 | Donation inactive charity, nonpositive quantity, waste missing reason; unconfirmed action | Reject; all allocations manager-confirmed and audited; no automatic donation |
 | DB-22 | Donation PENDING -> COLLECTED -> COMPLETED and unauthorized status update | Manager-only status endpoint updates history/event; cancellation/reallocation case remains gated by open policy |
 | DB-23 | Recipient A authenticates while B receives foreground notification | A sees no B row through Node or Realtime; no direct general SELECT/write privileges; mark-read only affects owned row |
 | DB-24 | Disabled/missing push preference, inactive profile/token, other user's token; valid opt-in | SKIPPED with recorded skip_reason for ineligible dispatch; submit only to intended recipient's valid active tokens; preserve per-device attempts |
 | DB-25 | Provider accepts message but no delivery callback | SUBMITTED remains distinct from DELIVERED; failure details/attempt timestamps preserved; retry adds attempt |
-| DB-26 | Two FIFO batches at MYR 2/kg and MYR 5/kg; consume 1 kg each; change master price afterwards | Ingredient cost stays MYR 7 from immutable consumed-batch snapshots; no recosting using ingredient master |
+| DB-26 | Two FEFO batches at MYR 2/kg and MYR 5/kg; consume 1 kg each; change master price afterwards | Ingredient cost stays MYR 7 from immutable consumed-batch snapshots; no recosting using ingredient master |
 | DB-27 | Produced 10, sold 6, prediction 8, lost sales 3, donated 2, wasted 1 | Error -2, estimated demand 9, leftover 4, remaining 1, leftover rate 40%; donations/unallocated units not counted as waste |
 | DB-28 | Revenue below cost; revenue/production zero | Negative gross profit/margin permitted; zero-denominator percentages Not Applicable; no misleading positive floor |
 | DB-29 | UI vs weekly/category/date-filtered CSV/PDF report | Same values and simulation labels; revenue totals not added to detailed transactions again; export cannot mutate source data |
@@ -107,7 +109,7 @@ Run measurements only after implementation under the report reference environmen
 1. Review the DOCX-derived catalogue/controlled values and unresolved donation cancellation policy.
 2. During future implementation, create schema/keys, generated mappings and seed examples; keep secrets outside DB settings.
 3. Implement JWT/profile/permission boundary and recipient-only Realtime policy before exposing business endpoints.
-4. Implement joint confirmation, FIFO/atomic POS, model lifecycle and transactional allocation before UI can invoke those operations.
+4. Implement joint confirmation, FEFO/atomic POS, model lifecycle and transactional allocation before UI can invoke those operations.
 5. Implement recipient preference/token/delivery tracking, report calculations and manual CSV/PDF exports.
 6. Run the planned schema, role, concurrency, rollback, provenance, cost/export and NFR checks; record actual evidence and failures at that time.
 

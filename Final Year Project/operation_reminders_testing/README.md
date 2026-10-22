@@ -1,10 +1,12 @@
 # Module 6: Manual Workflow and Verification — Detailed Plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 1.4, 3.4.4–3.6, 4.5.3–4.5.4, 4.7–4.10 and Table 4.27. **Status:** planned acceptance criteria and test procedures, not executed tests or completed results. The repository contains a Flutter starter and design Markdown. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) supports navigation; the DOCX is the authority.
 
 ## 1. Scope, dependencies and evidence
 
-Technical Module 6 integrates request-derived pending indicators and tests all eight functional modules. It depends on Module 0 schema/contracts; Module 1 authentication, administration, notification and external-adapter boundaries; Module 2 prediction/model lifecycle; Module 3 joint ingredient planning/FIFO; Module 4 atomic simulation; and Module 5 allocation/reporting. It does not add a ninth functional module or replace the report's eight-module mapping.
+Technical Module 6 integrates request-derived pending indicators and tests all eight functional modules. It depends on Module 0 schema/contracts; Module 1 authentication, administration, notification and external-adapter boundaries; Module 2 prediction/model lifecycle; Module 3 joint ingredient planning/FEFO; Module 4 atomic simulation; and Module 5 allocation/reporting. It does not add a ninth functional module or replace the report's eight-module mapping.
 
 Each future test record should contain the BR/FR/NFR IDs, dataset/fixture, authenticated role, action, expected result, actual result, environment and evidence reference. Preserve failures and unavailable measurements; do not manufacture achieved accuracy, timing or UAT results. Vitest/pytest/Flutter testing may be used when implementation exists, but this task does not install packages, create executable tests, migrate a database or deploy services.
 
@@ -25,7 +27,7 @@ Events cover low stock, expiring/expired batches, low confidence, lost sales, ex
 3. A Bakery Manager opens/refreshes the dashboard; `GET /api/pending-actions` displays prerequisites without writing business data. The administrator's View does not expose or gain manager-only actions.
 4. The manager calls `POST /api/predictions` for the next day. Inspect mode-specific confidence and context traceability, then `GET /api/recommendations/:date` for the joint ingredient plan.
 5. The manager confirms or feasibly overrides using `PUT /api/production-decisions`; an override has a reason. Check shared requirements and unchanged stored inventory after confirmation.
-6. On the applicable simulation date, `POST /api/simulations` defaults to the bakery's current date. The stored prediction and confirmed decision are mandatory. One Node-owned transaction/RPC locks/revalidates stock, consumes valid batches in `received_date, id` order and commits inventory, movements, production, transactions, DailyResult and validated simulation-origin history together.
+6. On the applicable simulation date, `POST /api/simulations` defaults to the bakery's current date. The stored prediction and confirmed decision are mandatory. One Node-owned transaction/RPC locks/revalidates stock, consumes valid batches in `expiry_date, received_date, id` order and commits inventory, movements, production, transactions, DailyResult and validated simulation-origin history together.
 7. Fetch `GET /api/simulations/:date` and transactions. Check units sold, lost sales, analytical estimated demand, leftovers and price/cost snapshots; show Simulated Data. Retry the same official request and prove that no ingredient is deducted twice.
 8. Read leftovers; manager confirms positive donation/waste quantities through `POST /api/donations` or `POST /api/waste-records`, then explicitly advances donation status through its permitted progress states. No donation or waste exists merely because surplus was produced.
 9. Request `GET /api/reports` and `/api/reports/export` with a seven-day range/category filter and CSV/PDF format. Verify common calculations, origins, signed/undefined values and no duplicate aggregation.
@@ -70,7 +72,7 @@ Account/provider failure tests must distinguish local transaction rollback from 
 
 Origin labels remain visible in performance reports. Simulation-based results do not establish real-world accuracy. MAPE < 10% and R² > 0.85, if tracked, are optional aspirations rather than report-mandated gates or achieved results. First activation with no active model requires valid candidate evaluation, administrator review and explicit confirmation. Its missing active-model comparator is not replaced with fabricated metric targets. Verify the initial activation separately from replacement of an active version.
 
-## 6. Shared inventory, FIFO and production decision checks
+## 6. Shared inventory, FEFO and production decision checks
 
 | Test | Fixture/action and expected outcome | Traceability |
 |---|---|---|
@@ -80,8 +82,8 @@ Origin labels remain visible in performance reports. Simulation-based results do
 | INV-04 | Processed decisions do not reserve stock again. Confirmation writes no inventory movements. Each newly recommended quantity decreases the temporary shared balance in ascending display_order | BR-INV-06; §§4.5.4, 4.9.3 |
 | INV-05 | Each category has multiple recipe ingredients; maximum is minimum whole-number quantity supported across remaining balances. Missing recipe/inactive ingredient or zero recipe requirement is rejected/reported | FR-INV-01/07/08; NFR-DAT-01 |
 | INV-06 | Feasible manager override above recommendation requires reason and combined-stock validation; no automatic production buffer above predicted sales | BR-INV-03; §4.9.3 |
-| FIFO-01 | Production date 2026-10-11: batch A received Oct 1 expires Oct 30; B received Oct 2 expires Oct 20. Both valid: consume A first despite B's earlier expiry | BR-INV-05; §§4.5.3, 4.9.3 |
-| FIFO-02 | Same received_date: consume lower id first. Inactive/expired batches excluded. Query/index/design ordering is received_date then id, not expiry-first FEFO | FR-INV-05/06; §4.5.3 |
+| FEFO-01 | Production date 2026-10-11: batch A received Oct 1 expires Oct 30; B received Oct 2 expires Oct 20. Both valid: consume B first because of its earlier expiry | BR-INV-05; §§4.5.3, 4.9.3 |
+| FEFO-02 | Same expiry_date: consume earlier received_date first; same expiry and receipt dates: consume lower id first. Inactive/expired batches excluded. Query/index/design ordering is expiry_date then received_date then id, all ascending | FR-INV-05/06; §4.5.3 |
 
 Test concurrent confirmations against the same shared inventory and verify combined outstanding commitments never become an accepted infeasible plan. Re-check at official simulation time because stock or expiry may change after confirmation. Recipes/units must use consistent conversions in planning, deductions and cost calculations.
 
@@ -156,7 +158,7 @@ External-service failures are assessed separately under NFR-REL-03 with visible 
 1. Review schema/DTO/role/endpoint mappings and [requirement traceability](../../planning_documents_change_report.md) before creating fixtures.
 2. Verify pure history selection, confidence, cold-start, report and quantity calculations at their Service boundaries.
 3. Verify authentication/authorization, settings, provider failure handling and candidate model lifecycle.
-4. Use transactional integration/concurrency tests for shared commitments, FIFO, duplicate simulation, all-or-nothing failure and allocations.
+4. Use transactional integration/concurrency tests for shared commitments, FEFO, duplicate simulation, all-or-nothing failure and allocations.
 5. Verify recipient Realtime/FCM behavior, UI/export parity and request-derived pending state.
 6. Execute the manual end-to-end scenario, then reference-environment performance, Android layouts and independent UAT.
 7. Record actual outcomes/evidence and unresolved defects; preserve truthful historical audit dates and distinguish plans from results.

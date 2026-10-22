@@ -1,5 +1,7 @@
 # Module 5: Leftover Management and Reporting — Detailed Plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Reconciled:** 2026-10-11 using the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.5.3–4.5.4, 4.6–4.9, including Tables 4.25–4.27. **Status:** design and future verification only. The repository currently has a Flutter starter and plans; none of the classes, endpoints, DTO sketches or workflows below is a claim of implemented functionality. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) is a navigation aid.
 
 ## 1. Functional scope and dependencies
@@ -130,7 +132,7 @@ Donation-status events use `NotificationService` with intended recipients, type 
 | Prediction/planning | Stored predicted units sold, mode, confidence where applicable, factors, joint ingredient limits, confirmation/override reason |
 | Sales/results | Confirmed production, simulated sold/lost-sales/estimated-demand/leftover values, transaction detail, date and simulation label |
 | Leftovers | Donated, discarded waste and remaining unallocated as separate quantities; eligible manual actions and donation status |
-| Inventory | Permitted stock/shortage/expiry information; administrator maintenance navigation; FIFO means receipt order |
+| Inventory | Permitted stock/shortage/expiry information; administrator maintenance navigation; FEFO means expiry date, then receipt date, then ID |
 | Model analytics | Origin-labelled MAE/RMSE/MAPE/R² and dataset periods; administrator model-management link |
 | Finance | Revenue, actual consumed-batch ingredient cost, gross profit and defined/null percentages; reporting-only |
 | Notifications | Recipient-only events with personal read state; foreground Realtime and preference-gated background FCM |
@@ -165,15 +167,15 @@ MODEL responses require a numerical confidence and applicable model version. COL
 | Leftover rate (%) | `leftover / produced * 100` |
 | Discarded waste rate (%) | `wasted / produced * 100` |
 | Revenue | `sum(sales_transactions.quantity * sales_transactions.unit_price)` using captured sale price |
-| Ingredient cost | Sum of consumed FIFO batch quantities times their historical unit-cost snapshots, converting grams/kg consistently |
+| Ingredient cost | Sum of consumed FEFO batch quantities times their historical unit-cost snapshots, converting grams/kg consistently |
 | Gross profit | `revenue - ingredient_cost` |
 | Gross-profit margin (%) | `gross_profit / revenue * 100` |
 
 For period ratios, aggregate numerators and denominators before dividing; do not average category/daily percentages. A zero denominator yields a null numeric value and **Not Applicable** on screen/PDF. CSV preserves a blank/null numeric cell with a corresponding applicability label; do not export an invented zero percentage. Signed prediction error and negative gross profit/margin remain permitted. Donated or still-unallocated leftovers are not discarded waste.
 
-Financial cost includes all ingredients consumed to produce the confirmed quantity, including units later donated or discarded. `IngredientCostService.calculateFromMovements` from Module 4 creates or verifies the stored production cost using exact FIFO batch movements and their cost snapshots; `ReportRepo` reads that committed history. Current ingredient master prices cannot rewrite historical cost.
+Financial cost includes all ingredients consumed to produce the confirmed quantity, including units later donated or discarded. `IngredientCostService.calculateFromMovements` from Module 4 creates or verifies the stored production cost using exact FEFO batch movements and their cost snapshots; `ReportRepo` reads that committed history. Current ingredient master prices cannot rewrite historical cost.
 
-Concrete planned fixture: consume 2 kg from an older batch priced RM3/kg and 1 kg from a later batch priced RM5/kg. Ingredient cost is RM11. With revenue RM8, gross profit is -RM3 and margin is -37.5%. A later master-price change to RM10/kg leaves this history unchanged. FIFO batch receipt order is `received_date, id`, excluding inactive/expired batches; expiry-first selection would change the cost and is not this report's algorithm.
+Concrete planned fixture: consume 2 kg from the earliest-expiring valid batch priced RM3/kg and 1 kg from the next-expiring valid batch priced RM5/kg. Ingredient cost is RM11. With revenue RM8, gross profit is -RM3 and margin is -37.5%. A later master-price change to RM10/kg leaves this history unchanged. FEFO batch consumption order is `expiry_date, received_date, id`, excluding inactive/expired/unreceived batches; costs follow the exact batches consumed under this revised policy.
 
 Detailed sales transactions provide time-slot rows; DailyResult contains the consolidated daily totals. Pick one level for each aggregate, never add both. Unique prediction/decision/production/result links avoid fan-out; aggregate allocation and transaction subqueries separately before joining to prevent multiplication of totals. A weekly report sums the selected seven days/categories once each.
 
@@ -205,7 +207,7 @@ Use a predictable sanitized filename, for example `BakeSmart_Weekly_Report_2026-
 | Cancellation before policy is defined | Unsupported mutation rejected; no automatic release or history deletion |
 | Cold-start confidence null | Heuristic label only; no fabricated percentage/model reference |
 | Predicted 100, units sold 80, produced 120 | Signed error -20, leftover 40; leftover and discarded waste displayed separately |
-| FIFO cost fixture above; master price subsequently changes | RM11 cost retained; negative profit/margin preserved |
+| FEFO cost fixture above; master price subsequently changes | RM11 cost retained; negative profit/margin preserved |
 | Zero production, zero demand or zero revenue | Corresponding rates Not Applicable; no NaN/infinity or misleading zero |
 | Detailed transactions joined to daily/allocation summaries | Revenue/cost/quantities counted once |
 | Weekly/category-filtered UI, CSV and PDF | Matching totals/formulas/null handling, date filters and origin labels |
@@ -216,7 +218,7 @@ Use a predictable sanitized filename, for example `BakeSmart_Weekly_Report_2026-
 1. Align normalized allocation DTOs, statuses, field mappings and shared report formulas with Module 0.
 2. Plan `DailyResultRepo`/allocation transaction participation, charity validation and audit before write endpoints.
 3. Add manager allocation/status Services and administrator charity Services; leave cancellation policy visibly unresolved.
-4. Build `ReportRepo` queries with correct aggregation grain and price/FIFO cost snapshots; build the common report model and CSV/PDF adapter.
+4. Build `ReportRepo` queries with correct aggregation grain and price/FEFO cost snapshots; build the common report model and CSV/PDF adapter.
 5. Add protected Controllers and role-specific Views, confidence/null rendering, filter validation and explicit confirmations.
 6. Integrate recipient notifications and request-derived pending actions; no automatic allocation or timed scheduler.
 7. Execute the planned allocation, permission, reporting, export, compatibility and usability checks from [Module 6](../operation_reminders_testing/README.md). No such implementation tests are executed in this documentation task.

@@ -1,5 +1,7 @@
 # Module 5: Leftover Management, Dashboard and Reports
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 **Build order:** sixth, after Modules 0–4. **Status:** proposed design reconciled 2026-10-11; no completed backend, database, Flutter dashboard or verification is claimed. The latest `RSW_SooKinMin_Project1 (1).docx` controls, especially Sections 3.4–3.6, 4.5.3–4.5.4, 4.6–4.9 and Table 4.27. See the [report mirror](../../RSW_SooKinMin_Project1.docx.md) for navigation.
 
 ## 1. Scope and mapping
@@ -20,7 +22,7 @@ The application is for one bakery on Android. Configured active categories drive
 | `AuditService`, `NotificationService` | Transaction-coupled allocation/status audit and intended-recipient event notification |
 | `ManagerDashboardView`, `AdministratorDashboardView`, `LeftoverManagementView`, `DonationStatusView`, `CharityPartnersView`, `ReportsView` | Role-specific controls, clear pending/confirmed state, simulated labels and filter/export actions |
 
-Module 0 supplies the canonical tables; Module 1 supplies JWT/active-profile validation, role enforcement, administration and notification boundaries. Module 2 supplies stored prediction modes, confidence and origin-labelled evaluation. Module 3 supplies jointly feasible recommendations/confirmed decisions. Module 4 supplies committed DailyResults, transaction price snapshots and FIFO batch-cost snapshots. Views request ordinary business data through Node; foreground notifications use the explicitly allowed recipient-scoped Supabase Realtime path.
+Module 0 supplies the canonical tables; Module 1 supplies JWT/active-profile validation, role enforcement, administration and notification boundaries. Module 2 supplies stored prediction modes, confidence and origin-labelled evaluation. Module 3 supplies jointly feasible recommendations/confirmed decisions. Module 4 supplies committed DailyResults, transaction price snapshots and FEFO batch-cost snapshots. Views request ordinary business data through Node; foreground notifications use the explicitly allowed recipient-scoped Supabase Realtime path.
 
 ## 3. Endpoints and permissions
 
@@ -63,7 +65,7 @@ Use one calculation path for UI, CSV and PDF:
 | Discarded waste rate | `wasted / produced * 100`; only confirmed disposal counts as waste |
 | Sales fulfilment | `units_sold / estimated_demand * 100` |
 | Revenue | `sum(transaction.quantity * transaction.unit_price_snapshot)` |
-| Ingredient cost | Sum of actual FIFO batch quantities consumed multiplied by their stored unit-cost snapshots, with unit conversion |
+| Ingredient cost | Sum of actual FEFO batch quantities consumed multiplied by their stored unit-cost snapshots, with unit conversion |
 | Gross profit / margin | `revenue - ingredient_cost`; `(gross_profit / revenue) * 100` |
 
 Zero-denominator percentages are **Not Applicable**, with null numeric API values; signed error and negative gross profit/margin are valid. Current ingredient master prices must not recalculate historical production cost. DailyResult totals and detailed transactions are alternative aggregation levels, not additive totals. Charts show associations without claiming that a waste/profit trend proves causal business improvement. Financial values are reporting-only direct ingredient-cost estimates, not net profit or decision inputs.
@@ -76,9 +78,9 @@ Reports are generated manually, including seven-day/weekly reports. Date/range/c
 
 1. Define normalized allocation/status DTOs and shared report formulas against the canonical schema.
 2. Plan locked transactional allocation Repos, active-charity validation, manager status workflow and audit; keep cancellation policy open.
-3. Build report aggregation from committed operational records, price snapshots and FIFO cost snapshots; add common CSV/PDF rendering.
+3. Build report aggregation from committed operational records, price snapshots and FEFO cost snapshots; add common CSV/PDF rendering.
 4. Add protected Controllers and role-specific Views, manual confirmations, mode-aware confidence and origin labels.
 5. Integrate recipient status/surplus notifications and request-derived pending indicators; introduce no timer or auto-donation path.
-6. Verify concurrent allocation, zero/excess quantities, inactive charity, missing reason, wrong-role rejection, status audit, FIFO cost changes, signed/undefined reporting cases, exports and the Module 6 performance/usability targets.
+6. Verify concurrent allocation, zero/excess quantities, inactive charity, missing reason, wrong-role rejection, status audit, FEFO cost changes, signed/undefined reporting cases, exports and the Module 6 performance/usability targets.
 
 See the [detailed design](README.md), [canonical schema](../../database_canonical_design.md), [test plan](../operation_reminders_testing/README.md) and [traceability](../../planning_documents_change_report.md). These are planned checks, not results.

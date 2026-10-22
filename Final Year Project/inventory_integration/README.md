@@ -1,5 +1,7 @@
 # Module 3: Inventory and Production Recommendations — Detailed Proposed Design
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially FR-INV-01–12, Sections 4.5.3–4.5.4, Table 4.27 and Sections 4.7.2/4.9.3. These are proposed contracts, algorithms and verification plans; no backend files, migrations or test results are represented as implemented.
 
 See [module mapping](MODULE.md), [architecture](../ARCHITECTURE.md), [canonical schema](../../database_canonical_design.md), [logical design](../../logical_view_canonical_design.md), [POS transaction](../pos_simulation/README.md) and [traceability](../../planning_documents_change_report.md).
@@ -15,7 +17,7 @@ Technical Module 3 delivers Inventory and Smart Production Recommendation and su
 | Recommendation review | BAKERY_MANAGER | `RecommendationController → RecommendationEngine` |
 | Production confirmation/revision | BAKERY_MANAGER | `ProductionDecisionController → ProductionDecisionService` |
 | Permitted inventory/report viewing | Both ACTIVE roles | Read Service/Repo DTOs |
-| Production ingredient deduction | Internal to manager-authorized POS | `TransactionRecordingService`, `SimulationCommitRepo`, `FifoBatchService` |
+| Production ingredient deduction | Internal to manager-authorized POS | `TransactionRecordingService`, `SimulationCommitRepo`, `FefoBatchService` |
 
 Every request validates JWT and the ACTIVE stored profile before permissions. Administrator accounts cannot confirm production; manager accounts cannot mutate catalogue/inventory. Never accept actor, role or feasibility claims from the client. Flutter ordinary CRUD uses Node. Supabase Auth, recipient-only foreground Realtime and FCM background notifications remain platform exceptions; FastAPI has no database access.
 
@@ -29,7 +31,7 @@ Recipes store positive `grams_per_unit`. Ingredient inventory, batches and movem
 | `RecipeService` | Read/validate one recipe specification per category; administrator changes with positive quantities and unique category–ingredient pairs |
 | `RecommendationEngine` | `recommend(targetDate)`; read stored predictions and build one shared temporary ingredient balance |
 | `ProductionDecisionService` | `confirmOrRevise(input, actor)`; joint feasibility, replacement quantity, required reason, serialized confirmation |
-| `FifoBatchService` | `consumeWithinTransaction(transaction, decisions, targetDate)`; exact receipt-ordered batch movements validated and applied through transaction-scoped Repos |
+| `FefoBatchService` | `consumeWithinTransaction(transaction, decisions, targetDate)`; exact expiry-ordered batch movements validated and applied through transaction-scoped Repos |
 | `IngredientCostService` | `calculateFromMovements(movements, batchSnapshots)`; reporting-only consumption costs grouped by production decision |
 | `InventoryRepo`, `InventoryBatchRepo`, `InventoryLogRepo` | Inventory/batch/movement reads and transaction-scoped writes/locks |
 | `IngredientRepo`, `BreadCategoryRepo`, `RecipeRepo` | Catalogue/configuration persistence and deterministic category order |
@@ -161,7 +163,7 @@ Production-date serialization and shared ingredient locks prevent two simultaneo
 
 If C in the example is revised after A=6 and B=2 are confirmed, replacing C=2 with C=3 requires 1,100 g flour and must fail with a 100 g shortage. Replacing C=2 with C=1 uses 900 g, not 1,100 g: the old quantity is removed before adding the new one.
 
-## 6. FIFO movement algorithm, query and indexes
+## 6. FEFO movement algorithm, query and indexes
 
 Deduction belongs to the atomic POS unit of work, after combined stock revalidation and before sales processing. Confirmation never deducts.
 
@@ -176,27 +178,27 @@ WHERE ingredient_id = :ingredient_id
   AND received_date <= :production_date
   AND expiry_date >= :production_date
   AND remaining_quantity_grams > 0
-ORDER BY received_date ASC, id ASC
+ORDER BY expiry_date ASC, received_date ASC, id ASC
 FOR UPDATE;
 ```
 
 Proposed matching indexes:
 
 ```sql
-CREATE INDEX idx_inventory_batches_fifo
-  ON inventory_batches (ingredient_id, received_date, id)
+CREATE INDEX idx_inventory_batches_fefo
+  ON inventory_batches (ingredient_id, expiry_date, received_date, id)
   WHERE status = 'ACTIVE';
 CREATE INDEX idx_inventory_batches_expiry
   ON inventory_batches (status, expiry_date);
 ```
 
-The first query is FIFO by receipt order; expiry-first would be FEFO. The separate expiry index/query is for eligibility and alerts, not consumption order.
+The first query implements FEFO: earliest expiry, then earliest receipt, then lowest ID. The separate status/expiry index supports eligibility checks and alerts.
 
-For all included confirmed decisions, acquire inventory locks in deterministic ingredient order, revalidate all outstanding commitments, then consume eligible batches in receipt/ID order. Within the date operation, process category decisions deterministically (display order) so each movement has one production-decision owner for reporting. Each deduction records negative `change_grams`, exact `batch_id`, `production_decision_id` and a shared `operation_id`. Update batch remainders/status and inventory caches in the same transaction as the POS result/history. Reject shortage instead of storing negative stock.
+For all included confirmed decisions, acquire inventory locks in deterministic ingredient order, revalidate all outstanding commitments, then consume eligible batches in expiry/receipt/ID order. Within the date operation, process category decisions deterministically (display order) so each movement has one production-decision owner for reporting. Each deduction records negative `change_grams`, exact `batch_id`, `production_decision_id` and a shared `operation_id`. Update batch remainders/status and inventory caches in the same transaction as the POS result/history. Reject shortage instead of storing negative stock.
 
-### FIFO versus FEFO verification fixture
+### FEFO versus FIFO verification fixture
 
-For production on October 8, batch A was received October 1 and expires October 30; batch B was received October 3 and expires October 10. Both are valid. FIFO consumes A before B even though B expires sooner. Equal receipt dates use ascending ID. A batch expired October 7 is excluded regardless of receipt order.
+For production on October 8, batch A was received October 1 and expires October 30; batch B was received October 3 and expires October 10. Both are valid. FEFO consumes B before A because B expires sooner. Equal expiry dates use earliest receipt; equal expiry and receipt dates use ascending ID. A batch expired October 7 is excluded regardless of receipt order.
 
 ## 7. Ingredient cost and report integration
 
@@ -211,7 +213,7 @@ Round once at the report's currency precision after summation. Include ingredien
 
 Example: consuming 600 g from a RM4/kg batch and 400 g from a RM7/kg batch costs RM5.20. Changing the current ingredient price to RM9/kg leaves the stored production cost at RM5.20. Each category's cost derives from its own decision-linked movements, preventing duplicated cost when several categories share batches.
 
-Module 4 snapshots transaction selling prices and stores consistent daily totals. Module 5 computes revenue, gross profit and margin from those totals and FIFO costs, allowing negative profit/margin and displaying zero-denominator percentages as Not Applicable. Financial outputs are reporting-only and simulation-labelled. Weekly/other CSV and PDF exports use the same backend calculations as Views.
+Module 4 snapshots transaction selling prices and stores consistent daily totals. Module 5 computes revenue, gross profit and margin from those totals and FEFO costs, allowing negative profit/margin and displaying zero-denominator percentages as Not Applicable. Financial outputs are reporting-only and simulation-labelled. Weekly/other CSV and PDF exports use the same backend calculations as Views.
 
 ## 8. Endpoints, Views and recipient events
 
@@ -235,10 +237,10 @@ Low-stock, expiry and external/system-failure events pass through Module 1's `No
 
 Future implementation order:
 
-1. Align canonical recipe/batch/decision types, partial FIFO index and unique operational-chain constraints.
+1. Align canonical recipe/batch/decision types, partial FEFO index and unique operational-chain constraints.
 2. Implement Repo read/lock/update contracts, administrator catalogue/restock validation and audit.
 3. Implement joint temporary-balance recommendations and serialized confirmation/revision.
-4. Implement receipt-ordered movement planning and snapshot cost calculations.
+4. Implement expiry-ordered movement planning and snapshot cost calculations.
 5. Integrate those components into the single POS transaction before exposing operational simulation.
 6. Add Views, recipient event integration and shared report/export inputs.
 7. Execute the following meaningful tests when implementation exists.
@@ -252,7 +254,7 @@ Future implementation order:
 | Concurrent confirmation versus simulation/admin inventory change | Consistent locks, fresh feasibility; no lost commitment or negative stock |
 | Processed versus failed simulation decision | Processed excluded from planning; rolled-back attempt remains outstanding |
 | No recipe, inactive ingredient, zero stock and zero prediction | Configuration rejection where invalid; valid zero capacities/quantities without negative values |
-| Receipt-order/expiry-order fixture and equal dates | A before B; equal receipts ordered by ID; expired/inactive/future batches excluded |
+| Receipt-order/expiry-order fixture and equal dates | B before A; equal expiry dates ordered by receipt date, then ID; expired/inactive/future batches excluded |
 | Confirmation inventory comparison | No batch/snapshot/movement changes |
 | 600 g at RM4/kg + 400 g at RM7/kg; later master-price change | Historical cost RM5.20, same in result/View/CSV/PDF |
 | Manager tries admin mutation; administrator tries confirmation | Rejected before mutation; ACTIVE-profile validation enforced |

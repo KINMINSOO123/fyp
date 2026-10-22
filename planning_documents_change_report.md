@@ -1,6 +1,8 @@
 # Smart Bakery planning-document reconciliation report
 
-**Current reconciliation:** started 2026-10-11; final review 2026-10-12. **Historical change-report snapshot:** 29 July 2026; historical database design/audit: 31 July 2026. Those dates describe earlier planning work, not completion or approval of the current design.
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
+**Historical reconciliation:** started 2026-10-11; final review 2026-10-12. **Historical change-report snapshot:** 29 July 2026; historical database design/audit: 31 July 2026. Those dates describe earlier planning work, not completion or approval of the current design.
 
 ## Source, scope and implementation status
 
@@ -12,7 +14,7 @@ Read the report's objectives and scope (Sections 1.1 and 1.4), business rules an
 
 The repository has a Flutter counter starter and plans. All described database schemas, DTOs, APIs, Python/Node classes, algorithms, UI and tests are **proposed**, not implemented or execution-verified. No completed implementation/evaluation chapters, UAT participants, accuracy improvements or test results are invented.
 
-## Modified planning files
+## Planning files covered by the October reconciliation and current design
 
 | Files | Actual reconciliation |
 |---|---|
@@ -22,7 +24,7 @@ The repository has a Flutter counter starter and plans. All described database s
 | [Data Foundation MODULE](Final%20Year%20Project/data_foundation/MODULE.md) and [README](Final%20Year%20Project/data_foundation/README.md) | Reconciled catalogue, constraints, controlled values, seeds, RLS, DTOs and schema verification order |
 | [Node Middleware MODULE](Final%20Year%20Project/nodejs_middleware/MODULE.md) and [README](Final%20Year%20Project/nodejs_middleware/README.md) | Concrete access/profile/role/settings/audit contracts; validated DTOs; recipient Realtime/FCM; manual pending state |
 | [ML Prediction MODULE](Final%20Year%20Project/ml_prediction/MODULE.md) and [README](Final%20Year%20Project/ml_prediction/README.md) | Exact confidence/cold-start formulas, null-safe cross-language contracts, origin selection, chronological evaluation and candidate lifecycle |
-| [Inventory Integration MODULE](Final%20Year%20Project/inventory_integration/MODULE.md) and [README](Final%20Year%20Project/inventory_integration/README.md) | Shared ingredient commitments, display-order recommendation, replacement confirmation, receipt-order FIFO and cost snapshots |
+| [Inventory Integration MODULE](Final%20Year%20Project/inventory_integration/MODULE.md) and [README](Final%20Year%20Project/inventory_integration/README.md) | Shared ingredient commitments, display-order recommendation, replacement confirmation, expiry-order FEFO and cost snapshots |
 | [POS Simulation MODULE](Final%20Year%20Project/pos_simulation/MODULE.md) and [README](Final%20Year%20Project/pos_simulation/README.md) | Required stored prediction/confirmation, single transaction/RPC, duplicate protection and complete rollback |
 | [Donation Dashboard MODULE](Final%20Year%20Project/donation_dashboard/MODULE.md) and [README](Final%20Year%20Project/donation_dashboard/README.md) | Manual transactional allocation, normalized status workflow, role UI and filtered CSV/PDF reports |
 | [Operation Reminders/Testing MODULE](Final%20Year%20Project/operation_reminders_testing/MODULE.md) and [README](Final%20Year%20Project/operation_reminders_testing/README.md) | Request-derived indicators, event notifications, measurable NFR and behavioral verification plans |
@@ -32,7 +34,7 @@ The repository has a Flutter counter starter and plans. All described database s
 | [Logical diagram plan](logical_view_class_diagram_plan.md) | Retained truthful starter audit, removed obsolete diagram instructions, added current diagram checks |
 | [This change report](planning_documents_change_report.md) | Actual changes, source references, complete requirement traceability, validation and open decisions |
 
-This is 22 edited planning files: three overview documents, fourteen module documents and five root design/audit/change documents. The already deleted report and unchanged report mirror are separately accounted for, not counted as new edits.
+The October 11-12 reconciliation edited 22 planning files: three overview documents, fourteen module documents and five root design/audit/change documents. The already deleted report and unchanged report mirror are separately accounted for, not counted as new edits.
 
 ## Discrepancies corrected and report references
 
@@ -44,13 +46,13 @@ This is 22 edited planning files: three overview documents, fourteen module docu
 | Cold start | Average available validated category sales, configured base only when empty; four context factors; null confidence/model reference | 4.5.3-4.5.4, 4.9.2; FR-DP-06/07, NFR-ACC-08 |
 | History/model governance | unitsSold target; exact origins and actual/imported/simulation selection; distinct days; untouched later holdout; same RF/LR data; separate candidates/evaluation/activation/restoration; higher-MAE rejection | 3.4.4, 3.5-3.6, 4.5, 4.9; NFR-ACC-01-07 |
 | Joint feasibility | Reserve confirmed/unprocessed commitments, allocate remaining stock in display_order, replace revised quantities and recalculate; no automatic buffer | 4.9.3; FR-INV-07-12 |
-| FIFO | Eligible batches by received_date then id; receipt-order/expiry-order divergence case | 4.5.3-4.5.4, 4.9.3 |
+| FEFO | Eligible batches by expiry_date then received_date then id; receipt-order/expiry-order divergence case | User revision 2026-10-16; replaces FIFO in 4.5.3-4.5.4 and 4.9.3 |
 | Official POS | Stored prediction plus manager confirmation; current-date default; context once; atomic inventory/production/transactions/results/history; duplicate-safe | 4.5.4, 4.9.3; BR-INV-05/06, BR-POS-01/07, FR-POS-08 |
 | Administration | Exact single profile role/status, no admin inheritance, final-admin guard, concrete Services/Repos/endpoints/Views and nonsecret settings/audit | 3.4.1, Table 4.27, 4.8; BR-UAM-03, FR-UAM/ADM |
 | Notification design | recipient_user_id, per-type preferences, owned tokens, tracked delivery states, scoped foreground SELECT exception and Node writes | 4.2.4, 4.5, 4.8; FR-ALT-01-04 |
 | Pending actions | Compute on opening/refresh/request; event-based alerts; no scheduled daily promises or operations | 1.4.1-1.4.2 |
 | Schema | 29 public application tables + managed auth.users; one view, zero PostgreSQL enum types; 21 controlled CHECK domains; normalized allocations and unique operational links | 4.5.1-4.5.4, Tables 4.15-4.19 |
-| Reporting | units_sold minus predicted error; leftover separate from discarded waste; FIFO batch-cost/transaction-price snapshots; signed profit; zero denominators unavailable; no duplicate totals | 4.5.3-4.5.4, 4.7.2 |
+| Reporting | units_sold minus predicted error; leftover separate from discarded waste; FEFO batch-cost/transaction-price snapshots; signed profit; zero denominators unavailable; no duplicate totals | 4.5.3-4.5.4, 4.7.2 |
 | Donation/export | Positive confirmed locked allocations, active charity/disposal reason; status endpoint; cancellation accounting open; manual date/period/category weekly CSV/PDF | 4.5.4, 4.7.1-4.7.3; FR-LDW/RPT |
 | Measurable quality | Report environment, timing percentiles, viewport range, independent UAT completion; meaningful fault/concurrency/role/metric checks remain planned | 3.6, 4.10; NFR-PER/USA/COM |
 
@@ -64,7 +66,7 @@ The module numbers below are the report's eight modules. Roles: **M** = ACTIVE B
 |---|---|---|---|
 | B1 / 1 User and Access Management | [Node README Sections 2-3](Final%20Year%20Project/nodejs_middleware/README.md); [logical catalogue Section 2](logical_view_canonical_design.md) | SupabaseAuthClient login/logout; ProfileService/UserProfileRepo GET/PATCH `/api/profile`; UserAdministrationService/AuthAdminAdapter/UserProfileRepo GET/POST `/api/admin/users`, PATCH `/:id` | Both own profile/session; A users/roles/status |
 | B2 / 2 Demand Prediction | [ML README Sections 3-7](Final%20Year%20Project/ml_prediction/README.md); [schema prediction/history](database_canonical_design.md) | PredictionOrchestrationService, PredictionService, FeaturePreparationService, ColdStartService, ConfidenceService; DailySalesRecordRepo/DailyPredictionRepo; POST `/api/predictions`, GET `/api/predictions/:date`; ContextService/WeatherRepo/CalendarRepo | M generates; permitted prediction/report reads |
-| B3 / 3 Inventory and Smart Production Recommendation | [Inventory README](Final%20Year%20Project/inventory_integration/README.md); [schema inventory/decision](database_canonical_design.md) | InventoryService/RecipeService/RecommendationEngine/ProductionDecisionService/FifoBatchService; InventoryBatchRepo/InventoryLogRepo/RecipeRepo/ProductionDecisionRepo; `/api/admin/ingredients,batches,categories,recipes`; GET `/api/inventory`, `/api/recommendations/:date`; PUT `/api/production-decisions` | A master/batch writes; M planning/confirmation |
+| B3 / 3 Inventory and Smart Production Recommendation | [Inventory README](Final%20Year%20Project/inventory_integration/README.md); [schema inventory/decision](database_canonical_design.md) | InventoryService/RecipeService/RecommendationEngine/ProductionDecisionService/FefoBatchService; InventoryBatchRepo/InventoryLogRepo/RecipeRepo/ProductionDecisionRepo; `/api/admin/ingredients,batches,categories,recipes`; GET `/api/inventory`, `/api/recommendations/:date`; PUT `/api/production-decisions` | A master/batch writes; M planning/confirmation |
 | B4 / 4 POS and Sales Simulation | [POS README](Final%20Year%20Project/pos_simulation/README.md); [architecture Section5](Final%20Year%20Project/ARCHITECTURE.md) | PosSimulationService/TransactionRecordingService/SimulationCommitRepo/DailyResultRepo/DailySalesRecordRepo; POST `/api/simulations`, GET `/api/simulations/:date`, GET `/:date/transactions` | M runs; permitted result/report reads |
 | B5 / 5 Leftover, Donation and Waste Management | [Donation README](Final%20Year%20Project/donation_dashboard/README.md); [schema allocations](database_canonical_design.md) | LeftoverManagementService/DailyResultRepo/DonationRepo/WasteRecordRepo; GET `/api/leftovers`, GET `/api/leftovers/:resultId/recommendation`; POST `/api/donations`, `/api/waste-records`; PATCH `/api/donations/:id/status`; CharityPartnerService/CharityPartnerRepo `/api/admin/charity-partners` | M allocation/status; A charity records |
 | B6 / 6 Reporting and Dashboard | [Donation README reporting/export](Final%20Year%20Project/donation_dashboard/README.md); [project plan Section 6](Final%20Year%20Project/fyp_food_waste.md) | DashboardService/ReportService/ReportRepo/ReportExportAdapter/IngredientCostService; GET `/api/dashboard`, `/api/reports`, `/api/reports/export` | Both, permitted data; manual read/export |
@@ -95,7 +97,7 @@ The matrix covers **116 distinct requirements: 26 BR, 58 FR and 32 NFR IDs**.
 | BR-INV-02 | B3 | Display-order allocations cannot reuse shared flour/butter/yeast. |
 | BR-INV-03 | B3 | Replace revised decision; jointly feasible reasoned override only. |
 | BR-INV-04 | B3 | Identify per-ingredient shortages and reduced/restock options. |
-| BR-INV-05 | B3/B4 | Receipt order wins when expiry order differs; expired/inactive excluded. |
+| BR-INV-05 | B3/B4 | Expiry order wins when receipt order differs; expired/inactive excluded. User revision replaces this report rule's FIFO ordering. |
 | BR-INV-06 | B3/B4 | Duplicate/concurrent run deducts each confirmed decision once. |
 | BR-POS-01 | B4 | Default current date; missing confirmation/prediction rejected. |
 | BR-POS-02 | B4 | Sold cannot exceed confirmed produced quantity. |
@@ -136,7 +138,7 @@ The matrix covers **116 distinct requirements: 26 BR, 58 FR and 32 NFR IDs**.
 | FR-INV-03 | B3/B8 | Restock and movement rows reconcile batch/snapshot balances. |
 | FR-INV-04 | B3/B7 | Low-stock/expired/expiring detection creates permitted recipient events. |
 | FR-INV-05 | B3 | Production-date eligibility excludes expired/inactive/future-received batches. |
-| FR-INV-06 | B3/B4 | FIFO receipt-date/id tie ordering, not FEFO. |
+| FR-INV-06 | B3/B4 | FEFO expiry-date/receipt-date/id ordering; explicit user change from report FIFO. |
 | FR-INV-07 | B3 | Whole max quantity uses remaining ingredient balance minimum. |
 | FR-INV-08 | B3 | Reserve commitments and prior display-order recommendations first. |
 | FR-INV-09 | B3 | Shortage response suggests feasible reduction/restocking. |
@@ -214,7 +216,7 @@ The matrix covers **116 distinct requirements: 26 BR, 58 FR and 32 NFR IDs**.
 
 Document validation is separate from application testing. Source requirements and embedded equations were reviewed; schema catalogue counts, DTO nullability, controlled values, endpoint/class names, diagrams, examples, implementation order and planned verification were cross-checked. The final static review on 2026-10-12 checked all 22 planning documents: 151 local Markdown links and their referenced headings resolve, 48 code fences are balanced, and the JSON example parses. All 116 report requirement IDs occur in the traceability matrix, with no missing or invented IDs; these IDs also match the extracted DOCX. The catalogue contains 29 public tables plus managed auth.users and one computed view, with 21 controlled domains and no PostgreSQL ENUM types. Every ERD entity's fields match its catalogue field dictionary.
 
-Targeted searches found no active obsolete confidence, optional-confirmation, expiry-first FIFO, scheduled-workflow, immediate-activation or automatic-donation guidance. `git diff --check` passes. The final Git path review is confined to the 22 planning Markdown files plus the user's pre-existing deletion of FYP Report.md. The untracked report mirror remains byte-identical to the supplied Downloads copy. Mermaid relationships were inspected as design text; no diagram renderer or application test suite was installed or run.
+During the 2026-10-12 review, targeted searches found no active obsolete confidence, optional-confirmation, expiry-first FIFO, scheduled-workflow, immediate-activation or automatic-donation guidance. `git diff --check` passes. The final Git path review is confined to the 22 planning Markdown files plus the user's pre-existing deletion of FYP Report.md. The untracked report mirror remains byte-identical to the supplied Downloads copy. Mermaid relationships were inspected as design text; no diagram renderer or application test suite was installed or run.
 
 No application tests, ML training, migrations, dependency installation or deployment were run. The timing, UAT, transaction, authorization and other checks in the matrix are test plans to execute after implementation. A successful documentation check is not evidence that those behaviors already work.
 
@@ -224,3 +226,11 @@ No application tests, ML training, migrations, dependency installation or deploy
 - **Future scope:** replacing a completed simulation requires a separate atomic policy for exact original batch movements, dependent allocation/history and audit. Scheduled reminders/background scheduling are also future work. Neither is promised in the present implementation order.
 
 First model activation requires valid candidate evaluation, administrator review and explicit confirmation; no incumbent comparison is fabricated when no active model exists. Quantity rounding uses nearest integer with half ties away from zero as a shared engineering convention; confidence is persisted without display-scale rounding. The revised documents also make routine design elaborations explicit, including uppercase status mappings, batch cost units, endpoint names and metadata for reproducing identical holdout datasets. These are planning choices for implementing the report, not additions to completed functionality or reasons to stop this documentation work.
+
+## FEFO revision - 2026-10-16
+
+The user explicitly changed rotation from FIFO to FEFO. This revision updates 20 planning Markdown files: the overview/architecture/structure chart; MODULE and README for data foundation, Node middleware, inventory integration, POS simulation, donation/dashboard and operation/testing; and the five root design/verification/change documents. The two ML documents contain no affected rotation contracts and are unchanged.
+
+Revised active algorithms, SQL query/index examples, FefoBatchService references, diagrams, implementation orders, cost descriptions and verification expectations use expiry_date, received_date, id ascending. Eligibility, shared commitments, atomicity and immutable consumed-batch costs are unchanged. Fixtures now require the newer but earlier-expiring batch to be consumed first, with receipt-date and ID tie-break cases. BR-INV-05 and FR-INV-06 retain their report IDs but explicitly record the changed acceptance expectation. The report DOCX and its Markdown mirror still describe FIFO and require a separate report revision to align with this user decision.
+
+Validation: inspected the diff and searched affected planning documents for obsolete receipt-first guidance and service/index names; git diff --check passed. Only these planning Markdown files changed in this revision. Existing untracked supabase files were left untouched; the inventory-batches migration is empty locally. No SQL was executed and no application tests were run. Prior dated audit results above remain historical evidence, not new test results.

@@ -1,5 +1,7 @@
 # Module 0: Data Foundation Design Guide
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Reconciled **11 October 2026** against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Section 4.5 and Tables 4.14-4.20. This README contains **proposed SQL and DTO examples**, not implemented files, migration output or verified behaviour. See [MODULE.md](MODULE.md), [canonical field dictionary/ERD](../../database_canonical_design.md) and [planned checks](../../database_schema_verification.md). The DOCX controls; historical July planning labels do not.
 
 ## 1. Build dependencies and scope
@@ -147,7 +149,7 @@ Count distinct days after this selection for the 30-observation threshold. `Dail
 
 `RecommendationEngine` reads stored predictions and allocates one temporary stock balance. Reserve confirmed unprocessed decisions first, report shortages, then visit unconfirmed active categories in display_order. Compute whole-unit maximum from remaining recipe ingredient balances, recommend min(prediction, maximum), and subtract usage before the next category. On confirmation/revision `ProductionDecisionService` validates the combined outstanding plan and replaces the old quantity rather than adding both. No stock changes at confirmation. Processed decisions are identified by an existing `daily_production.production_decision_id` and excluded from commitments. Manager overrides require a reason and joint feasibility; no automatic production buffer.
 
-A proposed `InventoryBatchRepo` query for FIFO is:
+A proposed `InventoryBatchRepo` query for FEFO is:
 
 ```sql
 SELECT id, ingredient_id, received_date, expiry_date,
@@ -158,17 +160,17 @@ WHERE ingredient_id = $1
   AND received_date <= $2
   AND expiry_date >= $2
   AND remaining_quantity_grams > 0
-ORDER BY received_date ASC, id ASC
+ORDER BY expiry_date ASC, received_date ASC, id ASC
 FOR UPDATE;
 
-CREATE INDEX idx_inventory_batches_fifo
-  ON inventory_batches(ingredient_id, received_date, id)
+CREATE INDEX idx_inventory_batches_fefo
+  ON inventory_batches(ingredient_id, expiry_date, received_date, id)
   WHERE status = 'ACTIVE';
 ```
 
-`$2` is the production date; expiry date is the last usable date in this planning convention. Expiry filtering precedes receipt-order FIFO; expiry-first ordering would be FEFO. Batches/ingredients are locked in a consistent order for concurrent operations.
+`$2` is the production date; expiry date is the last usable date in this planning convention. Expiry filtering excludes unusable batches; FEFO selects the earliest expiry first, then receipt date and ID. Batches/ingredients are locked in a consistent order for concurrent operations.
 
-Official simulation requires selected-date stored prediction and manager confirmation; default date is current bakery-local date. `PosSimulationService` and `TransactionRecordingService` through `SimulationCommitRepo` own one PostgreSQL transaction/RPC. Lock decisions and relevant inventory; revalidate all outstanding commitments; deduct selected confirmed decisions FIFO once before sales processing. Use the stored contextual prediction plus time-slot/stochastic variation without multiplying weather/holiday/season again. Persist batch/snapshot changes, inventory_log movements, daily_production, sales_transactions, daily_results and one validated SIMULATION_GENERATED history row per result in the same commit. Any failure rolls back every change. Uniqueness plus decision locks handles duplicate requests with `409 ALREADY_SIMULATED` and a stored-result link, without further inventory/history mutation; operation_id merely groups movements. A batch of categories is all-or-nothing.
+Official simulation requires selected-date stored prediction and manager confirmation; default date is current bakery-local date. `PosSimulationService` and `TransactionRecordingService` through `SimulationCommitRepo` own one PostgreSQL transaction/RPC. Lock decisions and relevant inventory; revalidate all outstanding commitments; deduct selected confirmed decisions FEFO once before sales processing. Use the stored contextual prediction plus time-slot/stochastic variation without multiplying weather/holiday/season again. Persist batch/snapshot changes, inventory_log movements, daily_production, sales_transactions, daily_results and one validated SIMULATION_GENERATED history row per result in the same commit. Any failure rolls back every change. Uniqueness plus decision locks handles duplicate requests with `409 ALREADY_SIMULATED` and a stored-result link, without further inventory/history mutation; operation_id merely groups movements. A batch of categories is all-or-nothing.
 
 Do not expose producedOverride or fallback-to-recommendation operational paths. Test-only inputs must not persist operational records. Re-simulation is future work until exact original-batch reversal, linked history/allocations and idempotency have an explicit atomic policy. No correction batch or extra SimulationRun table substitutes for rollback.
 
@@ -180,7 +182,7 @@ Do not expose producedOverride or fallback-to-recommendation operational paths. 
 | leftover | produced - units_sold |
 | sales_prediction_error | units_sold - predicted_units_sold, signed |
 | leftover_rate_pct | leftover / produced * 100; NULL/Not Applicable at produced=0 |
-| ingredient_cost | Sum actual FIFO deduction grams/1000 * immutable batch.unit_cost (canonical MYR/kg snapshot convention) |
+| ingredient_cost | Sum actual FEFO deduction grams/1000 * immutable batch.unit_cost (canonical MYR/kg snapshot convention) |
 | revenue | Sum transaction quantity * immutable unit_price; do not add transaction totals to DailyResult totals again |
 | gross_profit / margin | revenue - ingredient_cost; profit/revenue * 100; negative allowed, revenue=0 -> Not Applicable |
 | remaining_unallocated_leftover | leftover - donated - wasted; never negative |
@@ -195,7 +197,7 @@ For the report's foreground Realtime, enable RLS and only a narrow authenticated
 
 ## 8. Planned verification and completion evidence
 
-After implementation, verify every catalogue/constraint/DTO mapping against the canonical document. Test inactive/wrong-role rejection and final-admin protection, 29/30 distinct-day gate and origin priority, null cold confidence/formula boundaries, higher-MAE activation rejection, shared ingredients/revisions, receipt-order FIFO with conflicting expiry order, duplicate simulation and fault injection at every commit stage, concurrent leftover allocation, recipient-only Realtime/read state, push opt-in/delivery tracking, historical batch/sale cost snapshots and CSV/PDF totals.
+After implementation, verify every catalogue/constraint/DTO mapping against the canonical document. Test inactive/wrong-role rejection and final-admin protection, 29/30 distinct-day gate and origin priority, null cold confidence/formula boundaries, higher-MAE activation rejection, shared ingredients/revisions, expiry-order FEFO with conflicting expiry order, duplicate simulation and fault injection at every commit stage, concurrent leftover allocation, recipient-only Realtime/read state, push opt-in/delivery tracking, historical batch/sale cost snapshots and CSV/PDF totals.
 
 Reference environment: Android 10+, at least 4 GB RAM, stable >=10 Mbps, up to 20 categories, 365 daily records/category, 50 displayed list records. Require >=95% specified screen requests within 3 s; prediction/recommendation within 15 s; 12-hour simulation or seven-day report within 30 s. Plan 360x640-412x915 dp checks and >=80% independent UAT task completion without inventing participant counts/results.
 

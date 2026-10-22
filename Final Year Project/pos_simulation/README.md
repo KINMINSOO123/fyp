@@ -1,5 +1,7 @@
 # Module 4: POS Simulation — Detailed Proposed Design
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`: FR-POS-01–08, NFR-REL-01/04, Sections 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. This is a design and test plan for the Flutter starter repository. No simulation backend, transaction RPC, migration or verification result is claimed to exist.
 
 See [module scope](MODULE.md), [inventory plan](../inventory_integration/README.md), [schema](../../database_canonical_design.md), [architecture](../ARCHITECTURE.md), [logical design](../../logical_view_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
@@ -60,7 +62,7 @@ flowchart LR
   C --> S[PosSimulationService]
   S --> CT[ContextService]
   S --> T[TransactionRecordingService]
-  T --> F[FifoBatchService]
+  T --> F[FefoBatchService]
   T --> SD[SalesDistributionService]
   T --> IC[IngredientCostService]
   T --> R[SimulationCommitRepo]
@@ -84,13 +86,13 @@ One transaction covers the entire selected-date simulation, not a separately com
 2. Lock decisions, recipe/configuration rows needed for consistent quantities, inventory snapshots and usable batches in a deterministic order. Shared ingredient locks serialize competing deductions across categories and dates.
 3. Reject missing/mismatched date/category links and any already processed decision. A decision is processed only when a committed `daily_production` references its unique decision ID.
 4. Recalculate combined requirements for all outstanding decisions for the selected date, including any other commitments relevant to the requested plan. Exclude processed decisions. Reject shortages before deduction.
-5. For each selected confirmed decision, deduct valid active batches in ascending `received_date`, then `id`; exclude expired, inactive and future-received batches. Record exact decision-linked movements using one `operation_id` and update batch remainders/status and inventory caches. Category processing is deterministic so movement costs have unambiguous decision owners.
+5. For each selected confirmed decision, deduct valid active batches in ascending `expiry_date`, then `received_date`, then `id`; exclude expired, inactive and future-received batches. Record exact decision-linked movements using one `operation_id` and update batch remainders/status and inventory caches. Category processing is deterministic so movement costs have unambiguous decision owners.
 6. Only after deduction, process simulated sales from stored predictions and configured stochastic/time-slot variations. Selling-price snapshots are captured from the validated category configuration.
 7. Persist one `daily_production` per decision, one `daily_results` per production, all `sales_transactions` and exactly one validated `daily_sales_records` row per category/result with `SIMULATION_GENERATED` origin and `source_daily_result_id`.
 8. Verify transaction sums, derived totals, nonnegative quantities, linked records and inventory balances. Record the successful operational audit in the transaction.
 9. Commit once. Return completed results. Only then dispatch recipient events through `NotificationService`.
 
-Any validation, calculation, deduction, insert or audit failure before commit rolls back **all** attempted batch changes, inventory snapshots, inventory movements, production, sales transactions, results and simulation-origin history. The decision remains unprocessed and stock has no retained deduction. A retry revalidates ingredients and performs FIFO again because the failed attempt committed nothing.
+Any validation, calculation, deduction, insert or audit failure before commit rolls back **all** attempted batch changes, inventory snapshots, inventory movements, production, sales transactions, results and simulation-origin history. The decision remains unprocessed and stock has no retained deduction. A retry revalidates ingredients and performs FEFO again because the failed attempt committed nothing.
 
 Illustrative orchestration pseudocode, not an implemented backend file:
 
@@ -105,7 +107,7 @@ PosSimulationService.run(date, authenticatedActor):
       rejectAnyProcessedDecision(tx)
       lockSharedInventoryAndRecipes(tx)
       validateAllOutstandingRequirements(tx, date)
-      movements = FifoBatchService.consumeWithinTransaction(tx)
+      movements = FefoBatchService.consumeWithinTransaction(tx)
       outcomes = processStoredPredictionSalesAfterDeduction(tx, context)
       costs = IngredientCostService.calculateFromMovements(movements, batchSnapshots)
       persistProductionTransactionsResultsAndHistory(tx, outcomes, costs)
@@ -171,7 +173,7 @@ Allow signed prediction errors and negative gross profit/margin. UI and CSV/PDF 
 |---|---|
 | Stored prediction 110, confirmed production 100, varied demand 118 | Sold 100, lost sales 18, estimated demand 118, leftover 0, signed sales prediction error -10 |
 | Confirmed production 0, varied demand 12 | Sold 0, lost sales 12, leftover 0, no sale transactions; leftover rate Not Applicable |
-| Produced 10, sold 1 at RM2, actual FIFO ingredient cost RM10 | Revenue RM2, gross profit -RM8, gross-profit margin -400%; valid reporting values |
+| Produced 10, sold 1 at RM2, actual FEFO ingredient cost RM10 | Revenue RM2, gross profit -RM8, gross-profit margin -400%; valid reporting values |
 | Consume 600 g at RM4/kg and 400 g at RM7/kg | Ingredient cost RM5.20, unchanged by a later master-price change |
 
 These are arithmetic examples, not measurements, user study outcomes or proof of improved profitability.
@@ -207,7 +209,7 @@ Future implementation sequence:
 
 1. Align canonical DTOs, source references and unique operational-chain constraints with Module 0.
 2. Implement `SimulationCommitRepo` transaction/lock context and the protected transaction/RPC boundary.
-3. Integrate Module 3 joint feasibility, FIFO movement ownership and cost snapshots.
+3. Integrate Module 3 joint feasibility, FEFO movement ownership and cost snapshots.
 4. Implement pure sales/time-slot calculations and deterministic fixture support for verification.
 5. Integrate all operational writes, history creation, total validation and audit into the single transaction.
 6. Add manager Controller/View flow and post-commit recipient events.
@@ -221,7 +223,7 @@ Transactions/rollback are required before exposing operational simulation, not w
 | Missing stored prediction or confirmation; client quantity/actor/role/feasibility fields | Rejected; no inferred production quantity and no writes |
 | Default date near UTC/local midnight | Bakery-local current date used consistently |
 | Two categories share constrained flour/butter/yeast | Joint commitment validation prevents overspending |
-| FIFO receipt order differs from expiry order | Oldest receipt consumed, expired/inactive/unreceived batches excluded; equal receipt IDs ordered |
+| FEFO receipt order differs from expiry order | Earliest expiry consumed; expired/inactive/unreceived batches excluded; equal expiry uses receipt date then ID |
 | Simultaneous duplicate requests and response-lost retry | One committed chain, one deduction; second request links to completed result |
 | Failure after first batch update, snapshot update, movement insert, production insert, result insert, transaction insert, history insert or audit | Entire operation restored to pre-attempt state; no completed history and decision remains unprocessed |
 | Failure in the last category | Earlier categories also roll back; no per-category partial completion |
@@ -229,7 +231,7 @@ Transactions/rollback are required before exposing operational simulation, not w
 | Weather/holiday inputs varied for display with same stored baseline and stochastic fixture | No second overall context multiplier |
 | Zero confirmed production, zero prediction and high demand | Nonnegative results; sold never exceeds confirmation; lost sales retained |
 | Sale/slot rounding | Sum of transaction quantities equals result sold; slot totals preserve whole-day total |
-| Mixed batch unit costs and later master/catalogue price changes | FIFO cost and transaction revenue snapshots preserved |
+| Mixed batch unit costs and later master/catalogue price changes | FEFO cost and transaction revenue snapshots preserved |
 | Signed error, negative gross profit/margin and zero denominators | Valid signed values; Not Applicable percentages where undefined |
 | Successful/failed simulation history | Exactly one validated simulation source row on success and none on failed attempt |
 | Recipient isolation/push opt-out/provider acknowledgement | Personal visibility, no unwanted push; SUBMITTED not mislabelled DELIVERED |

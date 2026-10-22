@@ -1,5 +1,7 @@
 # Module 3: Inventory and Production Recommendations — Proposed Module Plan
 
+**Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
+
 Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. These components and checks are proposed for the Flutter starter repository, not implemented functionality. See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [schema](../../database_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
 
 ## 1. Scope, mapping and permissions
@@ -21,8 +23,8 @@ Module 0 supplies normalized recipes, batches/cost snapshots, movements, decisio
 | `InventoryService`, `RecipeService` | Validated administration, snapshots/movements and auditing |
 | `RecommendationEngine` | Reserve outstanding commitments and allocate shared balances in display order |
 | `ProductionDecisionService` | Validate combined requirements and replace revised quantities atomically; no deduction |
-| `FifoBatchService` | Valid receipt-ordered batch movements inside the POS transaction |
-| `IngredientCostService` | Reporting-only actual FIFO movement costs using immutable batch snapshots |
+| `FefoBatchService` | Valid expiry-ordered batch movements inside the POS transaction |
+| `IngredientCostService` | Reporting-only actual FEFO movement costs using immutable batch snapshots |
 | `InventoryRepo`, `InventoryBatchRepo`, `InventoryLogRepo`, `RecipeRepo`, `IngredientRepo`, `BreadCategoryRepo`, `DailyPredictionRepo`, `ProductionDecisionRepo` | Node persistence and transaction-scoped consistent reads/writes |
 | `InventoryView`, `RecipeView`, `ProductionPlanningView` | Role-appropriate administration, confirmation and validation feedback |
 
@@ -38,9 +40,9 @@ On confirmation/revision, validate all outstanding decisions using the proposed 
 
 Planning/confirmation changes no inventory or movement rows. A decision with committed `daily_production` is processed and excluded from outstanding commitments. POS revalidates current stock.
 
-## 4. FIFO and cost
+## 4. FEFO and cost
 
-FIFO excludes expired/inactive batches and consumes valid batches by ascending `received_date`, then `id`. Expiry determines eligibility, not ordering. Expiry-first ordering is FEFO. The FIFO index is `(ingredient_id, received_date, id) WHERE status = 'ACTIVE'`; a separate expiry index supports alerts.
+FEFO excludes expired/inactive batches and consumes valid batches by ascending `expiry_date`, then `received_date`, then `id`. Expiry determines both eligibility and primary ordering; receipt date and ID break ties. The FEFO index is `(ingredient_id, expiry_date, received_date, id) WHERE status = 'ACTIVE'`; a separate expiry index supports alerts.
 
 Movements retain `batch_id`, signed `change_grams`, `production_decision_id` and `operation_id`. Batch `unit_cost` is the immutable receipt snapshot, normalized in the proposed schema to MYR/kg. `IngredientCostService.calculateFromMovements` sums `abs(change_grams) / 1000 * batch.unit_cost` for production deductions. Current ingredient-master prices never replace these snapshots. Costs are reporting-only and cannot change predictions/recommendations.
 
@@ -52,6 +54,6 @@ Manually requested weekly/other reports and Views share calculations. Inventory 
 
 ## 6. Implementation and verification plan
 
-Implement later: schema/DTO invariants and Repos; administrator catalogue/restock services; shared-balance recommendations and serialized confirmation; FIFO movements/costs; atomic POS integration; Views; recipient events/reports; meaningful checks.
+Implement later: schema/DTO invariants and Repos; administrator catalogue/restock services; shared-balance recommendations and serialized confirmation; FEFO movements/costs; atomic POS integration; Views; recipient events/reports; meaningful checks.
 
-The [README](README.md) supplies algorithms, shared-ingredient examples, endpoints, SQL sketches and tests for concurrent commitments, replacement revisions, processed decisions, eligibility, FIFO versus FEFO, cost snapshots, cross-role rejection and 15-second recommendation performance. This planning change runs no migration or application test.
+The [README](README.md) supplies algorithms, shared-ingredient examples, endpoints, SQL sketches and tests for concurrent commitments, replacement revisions, processed decisions, eligibility, FEFO versus FIFO, cost snapshots, cross-role rejection and 15-second recommendation performance. This planning change runs no migration or application test.
