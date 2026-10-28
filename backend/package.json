@@ -2,18 +2,24 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "main": "dist/index.js",
+  "main": "dist/server.js",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node --env-file=.env dist/server.js",
+    "check:db": "node --env-file=.env dist/scripts/checkDatabase.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^24.19.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "express": "^5.3.0"
   }
 }
