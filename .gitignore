@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+ml_service/.venv/
+ml_service/**/__pycache__/
+ml_service/.pytest_cache/
+ml_service/artifacts/*.joblib
