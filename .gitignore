@@ -44,7 +44,16 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Python ML service
 ml_service/.venv/
 ml_service/**/__pycache__/
 ml_service/.pytest_cache/
-ml_service/artifacts/*.joblib
+ml_service/.coverage
+ml_service/htmlcov/
+ml_service/artifacts/*
+!ml_service/artifacts/.gitkeep
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
