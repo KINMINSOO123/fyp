@@ -1,9 +1,9 @@
 import { AppError } from "../../shared/AppError.js";
-import { AuthAdminAdapter } from "./auth-admin.adapter.js";
+import type { AuthAdminAdapter } from "./auth-admin.adapter.js";
 import type {
   AdminUserListPage, AdminUserListItem
 } from "./user-administration.model.js";
-import { UserAdministrationRepo } from "./user-administration.repo.js";
+import type { UserAdministrationRepo } from "./user-administration.repo.js";
 import type {
   AccountStatus,
   UserProfile,
@@ -11,8 +11,27 @@ import type {
 } from "../profile/profile.model.js";
 
 export class UserAdministrationService {
-  private readonly authAdminAdapter = new AuthAdminAdapter();
-  private readonly userRepo = new UserAdministrationRepo();
+  constructor(
+    private readonly providedAuthAdminAdapter?: Pick<
+      AuthAdminAdapter, "listAccounts" | "createAccount" | "deleteAccount"
+    >,
+    private readonly providedUserRepo?: Pick<
+      UserAdministrationRepo,
+      "findProfilesByUserIds" | "createProfileWithAudit" | "updateProfileWithAudit"
+    >,
+  ) {}
+
+  private async authAdminAdapter() {
+    return this.providedAuthAdminAdapter ?? new (
+      await import("./auth-admin.adapter.js")
+    ).AuthAdminAdapter();
+  }
+
+  private async userRepo() {
+    return this.providedUserRepo ?? new (
+      await import("./user-administration.repo.js")
+    ).UserAdministrationRepo();
+  }
 
   async listUsers(query: {
     page?: unknown;
@@ -32,10 +51,12 @@ export class UserAdministrationService {
       50,
     );
 
+    const authAdminAdapter = await this.authAdminAdapter();
+    const userRepo = await this.userRepo();
     const { accounts, total } =
-      await this.authAdminAdapter.listAccounts(page, pageSize);
+      await authAdminAdapter.listAccounts(page, pageSize);
 
-    const profiles = await this.userRepo.findProfilesByUserIds(
+    const profiles = await userRepo.findProfilesByUserIds(
       accounts.map((account) => account.userId),
     );
 
@@ -189,20 +210,22 @@ export class UserAdministrationService {
       );
     }
 
-    const account = await this.authAdminAdapter.createAccount(
+    const authAdminAdapter = await this.authAdminAdapter();
+    const userRepo = await this.userRepo();
+    const account = await authAdminAdapter.createAccount(
       email,
       password,
     );
 
     try {
       const profile =
-      await this.userRepo.createProfileWithAudit(
-        actorUserId,
-        account.userId,
-        fullName,
-        role as UserRole,
-        requestedStatus as AccountStatus,
-      );
+        await userRepo.createProfileWithAudit(
+          actorUserId,
+          account.userId,
+          fullName,
+          role as UserRole,
+          requestedStatus as AccountStatus,
+        );
 
       return {
         ...account,
@@ -216,7 +239,7 @@ export class UserAdministrationService {
 
       try {
         const profiles =
-          await this.userRepo.findProfilesByUserIds([
+          await userRepo.findProfilesByUserIds([
             account.userId,
           ]);
 
@@ -242,7 +265,7 @@ export class UserAdministrationService {
 
       // No profile exists, so removing the incomplete Auth account is safe.
       try {
-        await this.authAdminAdapter.deleteAccount(
+        await authAdminAdapter.deleteAccount(
           account.userId,
         );
       } catch {
@@ -387,7 +410,8 @@ export class UserAdministrationService {
       accountStatus = body.accountStatus;
     }
 
-    return this.userRepo.updateProfileWithAudit(
+    const userRepo = await this.userRepo();
+    return userRepo.updateProfileWithAudit(
       actorUserId,
       targetUserId,
       fullName,

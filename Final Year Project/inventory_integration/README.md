@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially FR-INV-01–12, Sections 4.5.3–4.5.4, Table 4.27 and Sections 4.7.2/4.9.3. These are proposed contracts, algorithms and verification plans; no backend files, migrations or test results are represented as implemented.
+Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially FR-INV-01–12, Sections 4.5.3–4.5.4, Table 4.27 and Sections 4.7.2/4.9.3. That is a historical design audit. As of 2026-11-04, Node has shared-balance recommendations, manager confirmation/revision and administrator catalogue, recipe, receipt and batch-removal endpoints with automated tests. Flutter has manager Production Planning and administrator Inventory Administration screens. The sixth and seventh SQL migrations stage audited confirmation and inventory-administration RPCs; neither has been applied or verified live. FEFO production deduction, POS integration, notifications and reporting remain planned.
 
 See [module mapping](MODULE.md), [architecture](../ARCHITECTURE.md), [canonical schema](../../database_canonical_design.md), [logical design](../../logical_view_canonical_design.md), [POS transaction](../pos_simulation/README.md) and [traceability](../../planning_documents_change_report.md).
 
@@ -12,8 +12,8 @@ Technical Module 3 delivers Inventory and Smart Production Recommendation and su
 
 | Capability | Role | Planned boundary |
 |---|---|---|
-| Ingredient/category/recipe administration | SYSTEM_ADMINISTRATOR | `InventoryController` / `RecipeController` → `InventoryService` / `RecipeService` → Repos |
-| Batch receipt/restock and inventory adjustments | SYSTEM_ADMINISTRATOR | `InventoryController → InventoryService`; transactional batch/snapshot/movement updates |
+| Ingredient/category/recipe administration | SYSTEM_ADMINISTRATOR | Implemented `InventoryAdminController → InventoryAdminService → InventoryAdminRepo`; staged RPC for atomic writes |
+| Batch receipt/restock and stock removal | SYSTEM_ADMINISTRATOR | Same implemented Node boundary; staged atomic batch/snapshot/movement/audit RPC |
 | Recommendation review | BAKERY_MANAGER | `RecommendationController → RecommendationEngine` |
 | Production confirmation/revision | BAKERY_MANAGER | `ProductionDecisionController → ProductionDecisionService` |
 | Permitted inventory/report viewing | Both ACTIVE roles | Read Service/Repo DTOs |
@@ -28,6 +28,7 @@ Recipes store positive `grams_per_unit`. Ingredient inventory, batches and movem
 | Class | Planned method/responsibility |
 |---|---|
 | `InventoryService` | `getInventory(date)`, `recordBatch(input, actor)`, `adjustBatch(input, actor)`; validate and atomically update batches, snapshots, movements and audit |
+| `InventoryAdminController`, `InventoryAdminService`, `InventoryAdminRepo` | Implemented administrator-only catalogue/recipe/batch API; strict input validation; staged `apply_inventory_admin_change_with_audit` RPC |
 | `RecipeService` | Read/validate one recipe specification per category; administrator changes with positive quantities and unique category–ingredient pairs |
 | `RecommendationEngine` | `recommend(targetDate)`; read stored predictions and build one shared temporary ingredient balance |
 | `ProductionDecisionService` | `confirmOrRevise(input, actor)`; joint feasibility, replacement quantity, required reason, serialized confirmation |
@@ -219,31 +220,29 @@ Module 4 snapshots transaction selling prices and stores consistent daily totals
 
 | Method/path | Permission | Responsibility |
 |---|---|---|
-| `GET /api/inventory` | Both, permitted visibility | Date-aware valid stock, low stock, expiry/batch and movement views |
-| `/api/admin/ingredients` | Administrator CRUD | Validated metadata; deactivate referenced items instead of deleting history |
-| `/api/admin/categories` | Administrator CRUD | Active status, unique display order, base and catalogue values |
-| `/api/admin/recipes` | Administrator CRUD | One positive-quantity recipe specification/category |
-| `/api/admin/batches` | Administrator CRUD within integrity rules | Receipt/restock/correction preserving history and immutable cost snapshot |
-| `GET /api/recommendations/:date` | Manager | Stored-prediction joint planning and shortage explanations |
+| `GET /api/inventory` | Both, planned | Date-aware valid stock, low stock, expiry and movement views |
+| `GET/POST /api/admin/inventory/ingredients`; `PATCH /api/admin/inventory/ingredients/:ingredientId` | Administrator, implemented | Validated ingredient metadata; no historical deletion |
+| `GET/POST /api/admin/inventory/categories`; `PATCH /api/admin/inventory/categories/:categoryId` | Administrator, implemented | Inactive-first category creation, recipe-before-activation, unique display order |
+| `GET/PUT /api/admin/inventory/categories/:categoryId/recipe` | Administrator, implemented | Atomic replacement of a positive, unique ingredient recipe |
+| `GET/POST /api/admin/inventory/batches`; `PATCH /api/admin/inventory/batches/:batchId/stock` | Administrator, implemented | Receipt and reasoned stock removal; batch cost snapshot and signed movement in staged RPC |
+| `GET /api/recommendations/:date` with optional `revisingPredictionId` | Manager | Stored-prediction joint planning, shortage explanations and a fresh revision preview |
 | `PUT /api/production-decisions` | Manager | Explicit confirmed quantity or unprocessed revision |
 
 There is no public ingredient-deduction endpoint: POS invokes the protected internal transaction. Referenced batches and movements cannot be deleted or recosted by generic CRUD; administrative operations preserve audit/history.
 
-`InventoryView`/`RecipeView` expose administrator changes and permitted read states. `ProductionPlanningView` displays the stored prediction, mode-aware confidence, joint capacity and shortages; it never shows a cold-start percentage. `ProductionPlanningView` requires explicit confirmation, an override/reduction reason and refreshed affected recommendations. An administrator may resolve requested restocking; managers cannot bypass permissions to restock themselves.
+The implemented `InventoryAdminScreen` exposes category, ingredient, recipe and batch forms to the administrator; the implemented `ProductionPlanningScreen` displays the stored prediction, mode-aware confidence, joint capacity and shortages. It never shows a cold-start percentage and requires explicit confirmation and reasons where applicable. Further date-aware stock and movement views remain planned. Managers cannot use administrator restocking routes.
 
 Low-stock, expiry and external/system-failure events pass through Module 1's `NotificationService`. Notification rows identify one `recipient_user_id`; preferences are per type/user. Foreground visibility and read state are recipient-only through Supabase Realtime's narrow read policy. Node owns writes/mark-read. Push uses only active valid tokens belonging to that opted-in recipient and records PENDING, SUBMITTED, DELIVERED, FAILED or SKIPPED attempts; SUBMITTED is not confirmed delivery. No global broadcast/deduplication assumption applies.
 
 ## 9. Implementation order and planned verification
 
-Future implementation order:
+Remaining implementation order:
 
-1. Align canonical recipe/batch/decision types, partial FEFO index and unique operational-chain constraints.
-2. Implement Repo read/lock/update contracts, administrator catalogue/restock validation and audit.
-3. Implement joint temporary-balance recommendations and serialized confirmation/revision.
-4. Implement expiry-ordered movement planning and snapshot cost calculations.
-5. Integrate those components into the single POS transaction before exposing operational simulation.
-6. Add Views, recipient event integration and shared report/export inputs.
-7. Execute the following meaningful tests when implementation exists.
+1. Apply and validate both staged production-confirmation and inventory-administration RPCs against the live schema; verify locks, category activation rules, audited stock movements, revision replacement and rollback. The Node/Flutter paths exist but live database behavior is unverified.
+2. Implement expiry-ordered production movement planning and batch snapshot cost calculations.
+3. Integrate those components into the single POS transaction before exposing operational simulation.
+4. Add recipient event integration and shared report/export inputs.
+5. Complete the planned live, concurrency, performance and UAT checks below. Automated Node and Flutter tests cover the implemented planning and administrator UI/API boundaries only.
 
 | Planned check | Expected result |
 |---|---|

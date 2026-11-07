@@ -2,24 +2,27 @@ import type { RequestHandler } from "express";
 import { AppError } from "../shared/AppError.js";
 import { AuthService } from "../modules/auth/auth.service.js";
 
-const authService = new AuthService();
+export function createAuthenticate(
+  authService: Pick<AuthService, "authenticate"> = new AuthService(),
+): RequestHandler {
+  return async (req, _res, next): Promise<void> => {
+    const authorization = req.get("Authorization");
 
-export const authenticate: RequestHandler = async (req, _res, next) : Promise<void> => {
-  const authorization = req.get("Authorization");
+    const match = authorization?.match(/^Bearer ([^\s]+)$/i);
 
-  const match = authorization?.match(/^Bearer ([^\s]+)$/i);
+    if (!match) {
+      throw new AppError(
+        401,
+        "UNAUTHENTICATED",
+        "A Bearer token is required.",
+      );
+    }
 
-  if (!match) {
-    throw new AppError(
-      401,
-      "UNAUTHENTICATED",
-      "A Bearer token is required.",
-    );
-  }
+    const accessToken = match[1];
 
-  const accessToken = match[1];
-
-  req.auth = await authService.authenticate(accessToken);
-  
-  next();
+    req.auth = await authService.authenticate(accessToken);
+    next();
+  };
 }
+
+export const authenticate = createAuthenticate();

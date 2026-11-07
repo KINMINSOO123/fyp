@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.2, 4.5 and 4.8–4.9. **Implementation status:** proposed design only; the repository contains a Flutter starter and planning documents. Names, endpoint contracts, SQL and TypeScript below describe future work, not existing files or verified functionality. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) is for navigation; the DOCX controls.
+**Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.2, 4.5 and 4.8–4.9. The audit date remains historical. **Implementation status on 2026-11-04:** the repository has Node authentication/profile/administrator-account, model lifecycle/review, manager prediction/production planning and administrator inventory endpoints, with automated tests. Five model/prediction SQL migrations and the production-confirmation and inventory-administration migrations are staged but not applied or verified live. External context fetching, POS and donation Services remain proposed. The DOCX controls the report requirements.
 
 ## 1. Architecture and dependency boundaries
 
@@ -108,9 +108,9 @@ Python `ConfidenceService` is the dedicated calculation boundary: `mu = mean(tre
 
 | Contract | Permission and invariants |
 |---|---|
-| `POST /api/predictions`; `GET /api/predictions/:date` | Manager generates next-day predictions; authorized read views preserve mode, null confidence and origins |
-| `GET /api/recommendations/:date`; `PUT /api/production-decisions` | Manager reviews/accepts/reduces/overrides; server derives feasibility and actor; overrides require reason |
-| `POST /api/admin/models/train`; `POST /api/admin/models/:id/evaluate`, `/activate`, `/restore` | Administrator; candidate remains inactive until explicit eligible activation |
+| `POST /api/predictions`; `GET /api/predictions/next`; `GET /api/predictions/:date` | Manager generates next-day predictions; authorized read views preserve bakery date, mode, null confidence and context provenance |
+| `GET /api/recommendations/:date` with optional `revisingPredictionId`; `PUT /api/production-decisions` | Manager reviews/accepts/reduces/overrides; server derives feasibility and actor; overrides require reason; current Node code stages the confirmation RPC for live validation |
+| `GET /api/admin/models`, `GET /api/admin/models/categories`, `GET /api/admin/models/:id`; `POST /api/admin/models/train`; `POST /api/admin/models/:id/evaluate`, `/activate`, `/restore` | Administrator-only active-category selection, paginated version review and separate lifecycle actions; candidate remains inactive until explicit eligible activation |
 | `POST /api/simulations` with `{ date? }`; `GET /api/simulations/:date` and `/api/simulations/:date/transactions` | Manager initiates simulation; date defaults to bakery current date; no operational `producedOverride` |
 | `GET /api/leftovers`; `GET /api/leftovers/:resultId/recommendation`; `POST /api/donations`; `POST /api/waste-records`; `PATCH /api/donations/:id/status` | Role-permitted reads; manager-confirmed allocation/status changes; positive quantity, active charity/disposal reason and transactional bounds |
 | `/api/admin/charity-partners` and `/:id` | Administrator create/update/deactivate; history retained |
@@ -168,4 +168,4 @@ No current-scope cron, timer, 06:00/18:00 reminder promises or automatic backgro
 6. Add derived pending-state reads, permitted navigation and manual action confirmations.
 7. Execute the planned [Module 6 checks](../operation_reminders_testing/README.md), including wrong/inactive role, forged actor/role/feasibility, concurrent final-admin removal, failed settings update, nullable COLD_START confidence, higher-MAE activation, origin deduplication, shared stock, duplicate/failed simulation, recipient isolation and delivery evidence. Verify list pagination at 50 records and up to 20 active categories.
 
-No packages, migrations, application code, deployment or runtime tests are part of this Markdown reconciliation. Provider operational details and a donation-cancellation/reallocation policy remain decisions for later implementation; they must not be presented as completed functionality.
+The 2026-10-11 Markdown reconciliation changed no packages, migrations or application code. Later implementation work has added UAM and prediction application code plus staged SQL migrations; the latter have not been applied or verified against the live database. Provider operational details and a donation-cancellation/reallocation policy remain decisions for later implementation; they must not be presented as completed functionality.

@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. These components and checks are proposed for the Flutter starter repository, not implemented functionality. See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [schema](../../database_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
+Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. That is the historical design audit. As of 2026-11-04, shared-balance recommendations, manager confirmation/revision and administrator inventory endpoints/screens have automated tests. The production-decision and inventory-administration RPCs are staged but have not been applied or verified live. FEFO production deduction and POS integration remain planned. See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [schema](../../database_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
 
 ## 1. Scope, mapping and permissions
 
@@ -18,9 +18,9 @@ Module 0 supplies normalized recipes, batches/cost snapshots, movements, decisio
 
 | Component | Responsibility |
 |---|---|
-| `InventoryController`, `RecipeController` | Administrator mutations and permitted reads through Services |
+| `InventoryAdminController` | Implemented administrator category, ingredient, recipe and batch routes; further inventory reporting remains planned |
 | `RecommendationController`, `ProductionDecisionController` | Manager recommendation and confirmation workflow |
-| `InventoryService`, `RecipeService` | Validated administration, snapshots/movements and auditing |
+| `InventoryAdminService`, `InventoryAdminRepo` | Implemented validation/reads and staged atomic audited catalogue/stock RPC; further stock views remain planned |
 | `RecommendationEngine` | Reserve outstanding commitments and allocate shared balances in display order |
 | `ProductionDecisionService` | Validate combined requirements and replace revised quantities atomically; no deduction |
 | `FefoBatchService` | Valid expiry-ordered batch movements inside the POS transaction |
@@ -54,6 +54,6 @@ Manually requested weekly/other reports and Views share calculations. Inventory 
 
 ## 6. Implementation and verification plan
 
-Implement later: schema/DTO invariants and Repos; administrator catalogue/restock services; shared-balance recommendations and serialized confirmation; FEFO movements/costs; atomic POS integration; Views; recipient events/reports; meaningful checks.
+Current code includes recommendation DTOs/Repos, shared-balance planning, manager confirmation/revision and administrator catalogue/recipe/stock APIs, plus both role-specific Flutter screens. Two transaction RPCs are staged. Next are live transaction verification, FEFO production movements/costs, atomic POS integration, recipient events/reports and the remaining checks.
 
-The [README](README.md) supplies algorithms, shared-ingredient examples, endpoints, SQL sketches and tests for concurrent commitments, replacement revisions, processed decisions, eligibility, FEFO versus FIFO, cost snapshots, cross-role rejection and 15-second recommendation performance. This planning change runs no migration or application test.
+The [README](README.md) supplies algorithms, shared-ingredient examples, endpoints, SQL sketches and planned checks for concurrent commitments, replacement revisions, processed decisions, eligibility, FEFO versus FIFO, cost snapshots, cross-role rejection and 15-second recommendation performance. Automated tests cover shared balances, revision replacement, processed decisions, administrator input validation, role rejection and both Flutter screens. Live SQL, performance and UAT outcomes remain unverified.

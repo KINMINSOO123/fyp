@@ -1,9 +1,11 @@
 import { AppError } from "../../shared/AppError.js";
-import { ProfileRepo } from "./profile.repo.js";
+import type { ProfileRepo } from "./profile.repo.js";
 import type { UserProfile } from "./profile.model.js";
 
 export class ProfileService {
-  private readonly profileRepo = new ProfileRepo();
+  constructor(
+    private readonly profileRepo?: Pick<ProfileRepo, "updateFullName">,
+  ) {}
 
   async updateOwnProfile(
     userId: string,
@@ -54,8 +56,10 @@ export class ProfileService {
       );
     }
 
-    const updatedProfile =
-      await this.profileRepo.updateFullName(userId, fullName);
+    const profileRepo = this.profileRepo ?? new (
+      await import("./profile.repo.js")
+    ).ProfileRepo();
+    const updatedProfile = await profileRepo.updateFullName(userId, fullName);
 
     if (!updatedProfile) {
       throw new AppError(

@@ -1,6 +1,8 @@
 # Module 2: ML Prediction — Detailed Proposed Design
 
-Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 3.5–3.6, 4.2, 4.5.3–4.5.4, 4.8 and 4.9.2. Formula images in Section 4.9.2 are part of the source. This document specifies future work; no Python server, TypeScript backend, schema migration or test result is claimed as implemented.
+Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 3.5–3.6, 4.2, 4.5.3–4.5.4, 4.8 and 4.9.2. Formula images in Section 4.9.2 are part of the source. That date records the design audit, not the current implementation state.
+
+Implementation status on 2026-11-04: Node has validated history selection, a `FastApiMlClient`, administrator model review/lifecycle endpoints, manager `POST /api/predictions`, and role-permitted `GET /api/predictions/next` and `GET /api/predictions/:date`. The manager Service builds next-day DTOs for every active category from selected history, configured factors, stored weather/calendar context and the active model; the fifth staged migration adds a context snapshot and one atomic batch-persistence RPC. Explicitly configured context fallbacks are labelled. Flutter has a next-day `PredictionView` and an administrator `ModelManagementView` with active-category selection, version history, same-holdout metrics and separate Train, Evaluate, Activate and Restore actions. External weather/holiday fetching and report exports remain planned. FastAPI has cold-start prediction, feature preparation, candidate RF/LR fitting, retained artifacts, RF inference, holdout evaluation and artifact validation. The five additive SQL migrations are staged and **have not been applied or verified against the live database**; the prediction and model-management writes require them. Automated route, parser and widget tests do not establish live database behavior, achieved model accuracy, performance or user acceptance.
 
 See [module scope](MODULE.md), [architecture](../ARCHITECTURE.md), [canonical schema](../../database_canonical_design.md), [logical design](../../logical_view_canonical_design.md) and [requirement traceability](../../planning_documents_change_report.md). The report governs; prior July design assertions have no overriding authority.
 
@@ -62,7 +64,7 @@ Origin-specific uniqueness prevents duplicates within an origin; invalid actual 
 
 Only records preceding the prediction target date may contribute historical features. Planned features include lag sales, shifted rolling averages/trends and same-weekday history; day/weekend/month/monsoon; weather; and holiday information. Fit preprocessing only on the permitted training period. Validation is chronologically after training, and the untouched final test period is later still. Missing-feature handling and configurable feature windows must be recorded with the candidate, with context defaults marked for traceability.
 
-Node owns weather/calendar retrieval and persists prediction references through `weather_record_id` and `prediction_calendar_events`. External failure produces an understandable retry action; configured permissible default/cached context is explicitly marked. Cost, price, revenue and gross profit do not enter the prediction target or recommendation logic.
+Node owns weather/calendar retrieval and persists prediction references through `weather_record_id` and `prediction_calendar_events`. The current manager endpoint reads stored context rows and uses only explicitly configured fallbacks when they are unavailable; it marks the source in `context_snapshot`. The setup example uses neutral factors, while administrator changes may select other values. External service adapters still need to fetch and refresh those rows for the full report workflow. External failure produces an understandable retry action; configured permissible default/cached context is explicitly marked. Cost, price, revenue and gross profit do not enter the prediction target or recommendation logic.
 
 ## 4. Exact prediction algorithms
 
@@ -211,7 +213,7 @@ Dataset fingerprints describe evaluation metadata/DTOs, not a new relational ent
 5. Explicit evaluation records comparable metrics and provenance. To replace an active model, evaluate both candidate and current active model on the exact same chronologically later dataset, unused in either model's fitting or parameter selection.
 6. On explicit activation confirmation, lock the category/model rows. Recheck valid artifacts, evaluation identity, the still-current active model and MAE. Reject candidate MAE greater than active MAE (NFR-ACC-05); equality is not a higher-MAE rejection. Missing/noncomparable/undefined primary MAE blocks replacement.
 7. Atomically switch the current active row to INACTIVE and candidate to ACTIVE, retaining versions, evaluation history and actor/time audit. Enforce at most one active model/category. Any failure preserves the previous active version.
-8. Restoration separately validates a retained previous version and atomically changes the active selection following administrator confirmation. It is explicitly audited as restoration, never disguised as candidate activation.
+8. Restoration separately checks that the selected version is an inactive, previously active Random Forest with a retained valid evaluation and intact artifact. Following administrator confirmation, it atomically makes that version active, retains the replaced version as inactive and records a restoration audit. The report's higher-MAE rule applies to candidate activation; restoration is a distinct recovery action (Section 3.6, UC-DP-02 A4/A7/A8). Failure leaves the current active version unchanged.
 
 First activation has no active comparator; require a valid candidate and valid evaluation but do not manufacture an active-model MAE. The report does not prescribe a particular holdout percentage, tree count or minimum test sample count; these are versioned configuration choices, subject to a nonempty valid holdout and mathematically meaningful metrics.
 
@@ -228,15 +230,18 @@ Every simulation-derived evaluation is visibly labelled simulation-based; mixed-
 
 | Method/path | Role | Planned handling |
 |---|---|---|
-| `POST /api/predictions` | Manager | Manually generate next-day predictions; accept target date, derive trusted configuration and active categories |
+| `POST /api/predictions` | Manager | Manually generate the next bakery date for every active category; optional matching `targetDate`; reject duplicate date |
 | `GET /api/predictions/:date` | Both, permitted data | Read stored mode/confidence/context/model details and origin-labelled comparisons |
-| `GET /api/admin/models` | Administrator | Versions, data periods, configuration, origins, metrics and artifact validity |
+| `GET /api/predictions/next` | Both, permitted data | Read the bakery's next date and its stored predictions for initial View state/refresh |
+| `GET /api/admin/models?breadCategoryId=&page=&pageSize=` | Administrator | Paginated versions (default 20, maximum 50/page), safe metadata, origin counts and latest evaluation per version |
+| `GET /api/admin/models/categories` | Administrator | Active categories for explicit candidate-training selection |
+| `GET /api/admin/models/:id` | Administrator | One version's safe metadata and latest evaluation for review before a lifecycle action |
 | `POST /api/admin/models/train` | Administrator | Create candidates for validated selected categories |
 | `POST /api/admin/models/:id/evaluate` | Administrator | Evaluate candidate/baseline and same-test active comparison |
 | `POST /api/admin/models/:id/activate` | Administrator | Explicit confirmed, guarded activation |
 | `POST /api/admin/models/:id/restore` | Administrator | Explicit confirmed restoration of retained valid version |
 
-Internal `POST /predict`, `POST /train`, `POST /evaluate` accept Node DTOs only. Public model reads cannot expose internal artifact files/secrets. Request body actor/role, active-state claims, confidence and feasibility claims are not trusted.
+Internal `POST /predict`, `POST /train`, `POST /evaluate` and `POST /artifacts/validate` accept Node DTOs only. `prediction.context_rules` holds configured category bases, weekday/monsoon/weather/holiday factors and explicit fallback controls; [the setup example](../../supabase/setup/prediction_context_settings.sql) starts with neutral factors and requires category bases before no-history predictions. The low-confidence threshold remains the separate `prediction.low_confidence_threshold` setting. Administrator model reads omit internal artifact paths/hashes; artifact validity is checked again during activation/restoration, not inferred from the latest stored evaluation. Latest evaluations for two versions must not be compared as if they used the same dataset unless their holdout fingerprints/periods match. Request body actor/role, active-state claims, confidence and feasibility claims are not trusted.
 
 `PredictionView` shows next-day target date, units, mode, confidence only for MODEL, Low Confidence/heuristic wording, major factors and marked context substitutions. `ModelManagementView` shows candidate versus active/LR metrics on their identified dataset and separate Train, Evaluate, Activate and Restore actions. It never presents candidate training as immediate activation.
 
@@ -244,14 +249,13 @@ Low-confidence and external/system-failure events are handed to Module 1's recip
 
 ## 8. Implementation order and planned verification
 
-Future implementation order:
+Remaining implementation order:
 
-1. Agree canonical field mapping and discriminated DTOs with Module 0; create Node observation-selection and metadata Repo contracts.
-2. Build authenticated Node Controllers/Services and `FastApiMlClient` boundary.
-3. Implement Python feature preparation, artifact validation, `ColdStartService` and `ConfidenceService`, followed by thin routes.
-4. Add training candidates, chronological evaluations and transactional activation/restoration.
-5. Add atomic prediction persistence/context references and recipient events.
-6. Build role-specific Views, reporting contracts and meaningful verification.
+1. Add external weather/holiday adapters and context refresh/coverage rules behind the Node context Repo; retain historical context provenance for model features.
+2. Apply and validate the five staged candidate, evaluation, activation, restoration and prediction-persistence migrations; add artifact reconciliation if an ML artifact is saved but candidate metadata fails to commit.
+3. Verify the administrator model review UI against a migrated live database, including selected-category training and retained version details before confirmation.
+4. Add recipient events and reporting integration for persisted predictions and evaluations.
+5. Build reporting contracts and complete the remaining verification, including performance and UAT.
 
 | Planned check | Expected evidence |
 |---|---|

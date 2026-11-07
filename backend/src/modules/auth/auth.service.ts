@@ -1,10 +1,21 @@
-import { supabaseAdmin } from "../../config/supabase.js";
 import { AppError } from "../../shared/AppError.js";
-import { ProfileRepo } from "../profile/profile.repo.js";
+import type { ProfileRepo } from "../profile/profile.repo.js";
 import type { UserProfile } from "../profile/profile.model.js";
 
+interface TokenVerifier {
+  getUser(accessToken: string): Promise<{
+    data: { user: { id: string } | null };
+    error: { status?: number } | null;
+  }>;
+}
+
+type ProfileReader = Pick<ProfileRepo, "findByUserId">;
+
 export class AuthService {
-  private readonly profileRepo = new ProfileRepo();
+  constructor(
+    private readonly tokenVerifier?: TokenVerifier,
+    private readonly profileRepo?: ProfileReader,
+  ) {}
 
   async authenticate(accessToken: string): Promise<UserProfile> {
     if (!accessToken.trim()) {
@@ -15,8 +26,9 @@ export class AuthService {
       );
     }
 
-    const { data, error } =
-      await supabaseAdmin.auth.getUser(accessToken);
+    const verifier = this.tokenVerifier ??
+      (await import("../../config/supabase.js")).supabaseAdmin.auth;
+    const { data, error } = await verifier.getUser(accessToken);
 
     if (error) {
       const status = error.status;
@@ -44,7 +56,10 @@ export class AuthService {
       );
     }
 
-    const profile = await this.profileRepo.findByUserId(data.user.id);
+    const profileRepo = this.profileRepo ?? new (
+      await import("../profile/profile.repo.js")
+    ).ProfileRepo();
+    const profile = await profileRepo.findByUserId(data.user.id);
 
     if (!profile) {
       throw new AppError(

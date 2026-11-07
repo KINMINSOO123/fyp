@@ -21,9 +21,10 @@ class ApiClient {
 
   Future<Map<String, dynamic>> postJson(
     String path,
-    Map<String, dynamic> body,
-  ) {
-    return _send(method: 'POST', path: path, body: body);
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    return _send(method: 'POST', path: path, body: body, timeout: timeout);
   }
 
   Future<Map<String, dynamic>> patchJson(
@@ -33,10 +34,15 @@ class ApiClient {
     return _send(method: 'PATCH', path: path, body: body);
   }
 
+  Future<Map<String, dynamic>> putJson(String path, Map<String, dynamic> body) {
+    return _send(method: 'PUT', path: path, body: body);
+  }
+
   Future<Map<String, dynamic>> _send({
     required String method,
     required String path,
     Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 15),
   }) async {
     final session = _supabase.auth.currentSession;
 
@@ -63,15 +69,19 @@ class ApiClient {
       if (method == 'GET') {
         response = await _httpClient
             .get(uri, headers: headers)
-            .timeout(const Duration(seconds: 15));
+            .timeout(timeout);
       } else if (method == 'POST') {
         response = await _httpClient
             .post(uri, headers: headers, body: jsonEncode(body))
-            .timeout(const Duration(seconds: 15));
+            .timeout(timeout);
       } else if (method == 'PATCH') {
         response = await _httpClient
             .patch(uri, headers: headers, body: jsonEncode(body))
-            .timeout(const Duration(seconds: 15));
+            .timeout(timeout);
+      } else if (method == 'PUT') {
+        response = await _httpClient
+            .put(uri, headers: headers, body: jsonEncode(body))
+            .timeout(timeout);
       } else {
         throw ArgumentError('Unsupported HTTP method.');
       }

@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Build order:** second, after Module 0. **Status:** proposed design reconciled on 2026-10-11; backend components and checks below are not implemented or verified. The latest `RSW_SooKinMin_Project1 (1).docx` is the authority; the repository [report mirror](../../RSW_SooKinMin_Project1.docx.md) supports navigation. See report Sections 3.4–3.6, 4.2, 4.5, 4.8 and 4.9.
+**Build order:** second, after Module 0. **Design audit:** 2026-10-11. **Implementation status on 2026-11-04:** authentication/profile/administrator-account, model lifecycle/review, manager prediction and production planning/confirmation, and administrator inventory have Node code and automated tests. Five model/prediction SQL migrations and two inventory/production RPC migrations are staged but not applied or verified live; external context adapters and later operational modules remain planned. The latest `RSW_SooKinMin_Project1 (1).docx` is the report authority. See Sections 3.4–3.6, 4.2, 4.5, 4.8 and 4.9.
 
 ## 1. Responsibility and functional-module mapping
 

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import type { AccountStatus, UserProfile, UserRole } from "../profile/profile.model.js";
-import { AppError } from "../../shared/AppError.js";
+import { mapAdminUpdateError } from "./admin-update-error.js";
 
 export class UserAdministrationRepo {
   async findProfilesByUserIds(
@@ -117,46 +117,7 @@ export class UserAdministrationRepo {
       .single();
 
     if (error) {
-      if (error.code === "P0002") {
-        throw new AppError(
-          404,
-          "USER_NOT_FOUND",
-          "The user profile does not exist.",
-        );
-      }
-
-      if (
-        error.code === "P0001" &&
-        error.message.includes(
-          "final active System Administrator",
-        )
-      ) {
-        throw new AppError(
-          409,
-          "FINAL_ACTIVE_ADMIN_REQUIRED",
-          "The final active System Administrator cannot be deactivated or assigned another role.",
-        );
-      }
-
-      if (error.code === "42501") {
-        throw new AppError(
-          403,
-          "FORBIDDEN",
-          "Administrator permission is required.",
-        );
-      }
-
-      if (error.code === "22023") {
-        throw new AppError(
-          400,
-          "VALIDATION_ERROR",
-          error.message,
-        );
-      }
-
-      throw new Error(
-        "Unable to update the user profile and audit record.",
-      );
+      throw mapAdminUpdateError(error);
     }
 
     if (!data) {

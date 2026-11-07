@@ -335,6 +335,8 @@ A composite FK (`source_daily_result_id`, `sales_date`, `bread_category_id`) ref
 | `activated_at` | `timestamptz` | NULL | Activation metadata |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
+The staged additive migration `20261104000100_model_candidate_metadata_and_rpcs.sql` proposes nullable `training_group_id`, `holdout_start`, `training_fingerprint`, `artifact_sha256`, `feature_version`, `training_origin_counts`, `holdout_origin_counts` and `historical_context_default_count` columns. These are implementation metadata for paired RF/LR candidates and reproducible evaluation, beyond the report's core table catalogue. The accompanying `20261104000200_record_model_evaluations_rpc.sql`, `20261104000300_activate_model_candidate_rpc.sql` and `20261104000400_restore_previous_model_rpc.sql` stage audited evaluation retention, guarded candidate activation and separate restoration. None of these four migrations has been applied or verified against the live database as of 2026-11-04; existing rows may have NULL extension fields and cannot be treated as comparable candidates or restorable previous versions without review.
+
 Constraints:
 
 - UNIQUE (`bread_category_id`, `version`);
@@ -400,8 +402,11 @@ UNIQUE (`model_version_id`, `feature_name`) and UNIQUE (`model_version_id`, `ran
 | `model_version_id` | `uuid` | NULL | FK → `ml_model_versions.id` ON DELETE RESTRICT |
 | `weather_record_id` | `uuid` | NULL | FK → `weather_records.id` ON DELETE RESTRICT |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
+| `context_snapshot` (staged extension) | `jsonb` | NULL for existing rows | Factors, context source labels, history count and explanation used at generation; object CHECK |
 
 Confidence is stored without display-scale rounding so threshold labels use the same persisted numerical value returned by ConfidenceService. Round only the displayed percentage.
+
+The staged `20261104000500_save_daily_predictions_batch_rpc.sql` migration adds `context_snapshot` and an audited Node-owned batch RPC. It locks the active category set, rechecks manager permission, next bakery date, active RF/history eligibility and linked context dates, then inserts every active category and its calendar links in one PostgreSQL transaction. An existing date or any failed item leaves no partial new predictions. This migration has not been applied or verified against the live database as of 2026-11-04. Weather/calendar service adapters remain planned; current Node code reads stored context rows and labels configured fallbacks.
 
 UNIQUE (`target_date`, `bread_category_id`). `MODEL` requires numerical confidence and a model-version reference validated as an active valid RF version when generated; later deactivation retains that historical reference. `COLD_START` requires both fields NULL. Cross-column SQL sketch (proposed, not a migration):
 
@@ -862,7 +867,7 @@ The recommendation operation performs no write. A manager must confirm each allo
 
 ### 9.3 Model activation/restoration transaction
 
-Node's `ModelManagementService` transaction through `MlModelVersionRepo` and `ModelEvaluationRepo` locks the category's versions, validates an active administrator, artifact validity and reviewed evaluations. A candidate cannot replace the active version if its MAE is greater on the same chronologically later untouched holdout (NFR-ACC-05); incomparable, missing or failed evaluation blocks replacement. On success deactivate old/activate selected version, record actor/time and audit, then commit together. A first activation without a prior model still requires a valid reviewed evaluation. Restoration is a separate explicit operation with validity/evaluation review. On failure retain current active version. The partial unique index prevents concurrent double activation. FastAPI never performs activation or persistence.
+The staged `activate_model_candidate_with_audit` RPC, called by Node's `ModelManagementService`, locks the category and model rows, validates an active administrator and reviewed comparable evaluations, then switches the model and writes its audit in one PostgreSQL transaction. Node first asks FastAPI to verify the artifact's retained file, identity and SHA-256 digest. A candidate cannot replace the active version if its MAE is greater on the same chronologically later untouched holdout (NFR-ACC-05); incomparable, missing or failed evaluation blocks replacement. A first activation without a prior model still requires a valid reviewed evaluation. The separate staged `restore_previous_model_with_audit` RPC requires an inactive previously active Random Forest, a valid retained evaluation, intact artifact and explicit administrator confirmation; it atomically restores the prior version and retains the replaced active version as inactive. The candidate higher-MAE gate does not apply to this recovery action (UC-DP-02 A4/A7/A8). On failure the current active version is retained. The partial unique index prevents concurrent double activation. FastAPI never performs activation or database persistence. Neither RPC has been exercised against the live database.
 
 ### 9.4 Settings and audit transactions
 

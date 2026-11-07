@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import '../../auth/application/session_controller.dart';
 import '../../profile/domain/user_profile.dart';
 import '../../profile/presentation/profile_screen.dart';
+import '../../prediction/presentation/prediction_screen.dart';
+import '../../model_management/presentation/model_list_screen.dart';
+import '../../inventory/presentation/production_planning_screen.dart';
+import '../../inventory/presentation/inventory_admin_screen.dart';
 import '../../user_administration/presentation/user_list_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -84,17 +88,81 @@ class HomeScreen extends StatelessWidget {
                     );
                   },
                 ),
-              )
-            else
-              const Card(
+              ),
+            const SizedBox(height: 16),
+            if (profile.role == UserRole.systemAdministrator) ...[
+              Card(
                 child: ListTile(
-                  leading: Icon(Icons.dashboard_outlined),
-                  title: Text('Bakery operations'),
-                  subtitle: Text(
-                    'Operational modules will appear here as they are implemented.',
-                  ),
+                  leading: const Icon(Icons.inventory_outlined),
+                  title: const Text('Inventory Administration'),
+                  subtitle: const Text('Manage bread categories, recipes, ingredients and batches.'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => const InventoryAdminScreen(),
+                    ));
+                  },
                 ),
               ),
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.model_training),
+                  title: const Text('Model Management'),
+                  subtitle: const Text(
+                    'Train, evaluate and manage model versions.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ModelListScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.auto_graph),
+                title: const Text('Demand Prediction'),
+                subtitle: Text(
+                  profile.role == UserRole.bakeryManager
+                      ? 'Generate and review next-day predictions.'
+                      : 'Review saved next-day predictions.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => PredictionScreen(role: profile.role),
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (profile.role == UserRole.bakeryManager) ...[
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Production Planning'),
+                  subtitle: const Text(
+                    'Review shared stock and confirm next-day production.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ProductionPlanningScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
             if (isSigningOut) ...[
               const SizedBox(height: 24),
               const Center(child: CircularProgressIndicator()),
