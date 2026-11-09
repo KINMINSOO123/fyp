@@ -1,4 +1,5 @@
--- Demonstration ingredient catalogue, selected 2026-10-21.
+-- Demonstration ingredient catalogue, selected 2026-10-21 and expanded
+-- 2026-11-09 for the additional four bread categories.
 -- All master prices below are explicit simulation assumptions in MYR/kg.
 -- They are not supplier quotes or verified current market averages.
 -- Sanity-check reference: https://take.app/60380752213/search?page=2
@@ -9,6 +10,9 @@
 -- Recipes will use grams per bun, including egg/sausage edible mass.
 -- Coconut filling is a purchased/prepared ingredient; do not also count its
 -- internal coconut/sugar components in the same recipe.
+-- Cheese topping, custard filling, coffee topping mix and chicken floss are
+-- treated as purchased/prepared ingredients. Their demo costs are assumptions,
+-- not supplier quotes. Do not count their internal components twice.
 -- Five ingredients were only examples in the plan, not a catalogue limit.
 
 BEGIN;
@@ -25,7 +29,11 @@ WITH seed(name, unit_cost, reorder_threshold) AS (
         ('Liquid Whole Egg', 12.00::numeric, 1000::numeric),
         ('Red Bean Paste', 10.00::numeric, 1000::numeric),
         ('Sweetened Coconut Filling', 12.00::numeric, 1000::numeric),
-        ('Chicken Sausage', 28.00::numeric, 1000::numeric)
+        ('Chicken Sausage', 28.00::numeric, 1000::numeric),
+        ('Cheese Topping', 40.00::numeric, 500::numeric),
+        ('Custard Filling', 18.00::numeric, 500::numeric),
+        ('Coffee Topping Mix', 32.00::numeric, 500::numeric),
+        ('Chicken Floss', 55.00::numeric, 500::numeric)
 )
 INSERT INTO public.ingredients (name, unit, unit_cost, reorder_threshold, is_active)
 SELECT seed.name, 'KG', seed.unit_cost, seed.reorder_threshold, true

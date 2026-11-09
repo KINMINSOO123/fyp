@@ -8,7 +8,7 @@ Reconciled **11 October 2026** against the latest `RSW_SooKinMin_Project1 (1).do
 
 Technical module 0 supports all eight report functional modules through shared persistence/contracts; [MODULE Section 1](MODULE.md#1-purpose-scope-and-functional-mapping) maps them to technical modules 0-6. Retain next-day prediction, inventory-aware recommendations, POS simulation and leftover/donation management. One Android bakery is in scope; customer ordering/payment, delivery/marketplace, real POS hardware, multiple branches and automatic background scheduling are excluded.
 
-Plan schema/contracts first, then Node Controllers/Services/Repos, ML DTOs/services, joint inventory/confirmation, atomic POS, leftover/reporting and notifications/checks. Four bread categories and five ingredients are example seed entries, not hard-coded loops/caps. Design and test up to 20 configured active categories.
+Plan schema/contracts first, then Node Controllers/Services/Repos, ML DTOs/services, joint inventory/confirmation, atomic POS, leftover/reporting and notifications/checks. The report's four bread categories and five ingredients are example seed entries, not hard-coded loops/caps; the optional current demo catalogue has eight categories and fourteen ingredients. Design and test up to 20 configured active categories.
 
 ## 2. Catalogue and naming checklist
 

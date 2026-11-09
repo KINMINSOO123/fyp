@@ -18,7 +18,7 @@ WITH checks(check_number, setup_item, ready, next_action) AS (
     UNION ALL
     SELECT 4, 'Active bread categories', EXISTS (
         SELECT 1 FROM public.bread_categories WHERE is_active
-    ), 'Add the initial bread catalogue; four categories are examples, not a limit.'
+    ), 'Add the demo bread catalogue; eight seeded categories are examples, not a limit.'
     UNION ALL
     SELECT 5, 'Active ingredients', EXISTS (
         SELECT 1 FROM public.ingredients WHERE is_active
@@ -56,6 +56,25 @@ WITH checks(check_number, setup_item, ready, next_action) AS (
               THEN (setting_value::text)::numeric BETWEEN 0 AND 100
               ELSE false END
     ), 'Set a numeric threshold between 0 and 100; the initial planned value is 75.'
+    UNION ALL
+    SELECT 9, 'Cold-start bases for active categories',
+        EXISTS (SELECT 1 FROM public.bread_categories WHERE is_active)
+        AND NOT EXISTS (
+            SELECT 1
+            FROM public.bread_categories AS category
+            LEFT JOIN public.system_settings AS setting
+                ON setting.setting_key = 'prediction.context_rules'
+            WHERE category.is_active
+              AND NOT CASE
+                  WHEN jsonb_typeof(
+                      setting.setting_value -> 'baseQuantities' -> (category.id::text)
+                  ) = 'number'
+                  THEN (
+                      setting.setting_value -> 'baseQuantities' -> (category.id::text)
+                  )::text ~ '^[0-9]+$'
+                  ELSE false
+              END
+        ), 'Run prediction_context_settings.sql after activating new categories.'
 )
 SELECT check_number, setup_item,
     CASE WHEN ready THEN 'READY' ELSE 'NEEDS SETUP' END AS status,
@@ -64,5 +83,5 @@ FROM checks ORDER BY check_number;
 
 -- Recipe completeness here means row presence and active ingredients only;
 -- correctness of ingredient amounts still requires review.
--- Batch/snapshot reconciliation, FEFO restocking, cold-start factors and base
--- quantities, external credentials and backend permissions are separate work.
+-- Batch/snapshot reconciliation, FEFO restocking, nonneutral cold-start factor
+-- calibration, external credentials and backend permissions are separate work.

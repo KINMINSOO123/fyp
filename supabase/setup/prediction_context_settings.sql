@@ -1,15 +1,22 @@
 -- Example configuration for the manual next-day prediction workflow.
--- Replace the administrator UUID and add baseQuantities entries for categories
--- without any validated sales history before running this file.
+-- Replace the administrator UUID before running this file. Every active
+-- category missing a cold-start base gets a provisional 10-unit demo base.
+-- Existing base quantities and other configured factors are preserved.
 -- Neutral factors are deliberate starting values, not measured demand effects.
 -- Missing weather/calendar data use explicitly labelled neutral fallbacks.
 
+WITH demo_bases AS (
+    SELECT coalesce(jsonb_object_agg(id::text, to_jsonb(10)), '{}'::jsonb)
+        AS base_quantities
+    FROM public.bread_categories
+    WHERE is_active
+)
 INSERT INTO public.system_settings (
     setting_key, setting_value, data_type, description, updated_by
 )
 SELECT
     'prediction.context_rules',
-    '{
+    jsonb_set('{
       "baseQuantities": {},
       "weekdayFactors": {
         "SUNDAY": 1, "MONDAY": 1, "TUESDAY": 1, "WEDNESDAY": 1,
@@ -26,16 +33,20 @@ SELECT
       "nonHolidayFactor": 1,
       "calendarVerifiedThrough": null,
       "allowCalendarFallback": true
-    }'::jsonb,
+    }'::jsonb, '{baseQuantities}', demo_bases.base_quantities, true),
     'JSON',
     'Configured prediction factors and explicitly labelled context fallbacks.',
     user_id
-FROM public.user_profiles
+FROM public.user_profiles CROSS JOIN demo_bases
 WHERE user_id = 'PASTE_ADMIN_USER_ID_HERE'::uuid
   AND role = 'SYSTEM_ADMINISTRATOR'
   AND account_status = 'ACTIVE'
 ON CONFLICT (setting_key) DO UPDATE
-SET setting_value = EXCLUDED.setting_value,
-    data_type = EXCLUDED.data_type,
-    description = EXCLUDED.description,
+SET setting_value = jsonb_set(
+        public.system_settings.setting_value,
+        '{baseQuantities}',
+        (EXCLUDED.setting_value -> 'baseQuantities') ||
+        coalesce(public.system_settings.setting_value -> 'baseQuantities', '{}'::jsonb),
+        true
+    ),
     updated_by = EXCLUDED.updated_by;

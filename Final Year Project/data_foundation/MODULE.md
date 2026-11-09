@@ -8,7 +8,7 @@
 
 ## 1. Purpose, scope and functional mapping
 
-Define shared persistence, domain mappings and constraints for the four objectives: next-day prediction, inventory-aware recommendations, POS simulation, and leftover/donation management. One bakery on Android is in scope. Customer ordering/payment, delivery/marketplace, real POS hardware, multi-branch operation and automatic background scheduling are excluded. Four bread categories and five ingredients are sample seed data; support the configured active catalogue and the reference workload of up to 20 categories.
+Define shared persistence, domain mappings and constraints for the four objectives: next-day prediction, inventory-aware recommendations, POS simulation, and leftover/donation management. One bakery on Android is in scope. Customer ordering/payment, delivery/marketplace, real POS hardware, multi-branch operation and automatic background scheduling are excluded. The report's four bread categories and five ingredients were examples, not limits; the current optional demo seed has eight categories and fourteen ingredients. Support the configured active catalogue and the reference workload of up to 20 categories.
 
 Technical build numbers 0-6 describe delivery dependencies; they are not replacements for the eight functional modules of Section 1.4.2:
 
