@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/application/session_controller.dart';
 import '../../profile/domain/user_profile.dart';
@@ -8,8 +9,18 @@ import '../../model_management/presentation/model_list_screen.dart';
 import '../../inventory/presentation/production_planning_screen.dart';
 import '../../inventory/presentation/inventory_admin_screen.dart';
 import '../../user_administration/presentation/user_list_screen.dart';
+import '../../pos_simulation/presentation/pos_simulation_screen.dart';
+import '../../leftovers/presentation/leftover_management_screen.dart';
+import '../../leftovers/presentation/charity_partners_screen.dart';
+import '../../reports/presentation/reports_screen.dart';
+import '../../notifications/presentation/notifications_screen.dart';
+import '../../notifications/presentation/pending_actions_panel.dart';
+import '../../notifications/data/push_registration_manager.dart';
+import '../../administration/presentation/settings_screen.dart';
+import '../../administration/presentation/audit_screen.dart';
+import '../../administration/presentation/calendar_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({
     required this.profile,
     required this.sessionController,
@@ -20,7 +31,60 @@ class HomeScreen extends StatelessWidget {
   final SessionController sessionController;
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  RealtimeChannel? _notificationChannel;
+
+  @override
+  void initState() {
+    super.initState();
+    PushRegistrationManager.instance.start(widget.profile.userId);
+    _notificationChannel = Supabase.instance.client
+        .channel('home-notifications:${widget.profile.userId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'recipient_user_id',
+            value: widget.profile.userId,
+          ),
+          callback: (_) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('New notification'),
+                action: SnackBarAction(
+                  label: 'View',
+                  onPressed: () => _openNotifications(),
+                ),
+              ),
+            );
+          },
+        )
+        .subscribe();
+  }
+
+  Future<void> _openNotifications() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => NotificationsScreen(userId: widget.profile.userId),
+    ),
+  );
+
+  @override
+  void dispose() {
+    final channel = _notificationChannel;
+    if (channel != null) Supabase.instance.client.removeChannel(channel);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final profile = widget.profile;
+    final sessionController = widget.sessionController;
     final roleLabel = switch (profile.role) {
       UserRole.bakeryManager => 'Bakery Manager',
       UserRole.systemAdministrator => 'System Administrator',
@@ -37,6 +101,12 @@ class HomeScreen extends StatelessWidget {
             onPressed: isSigningOut
                 ? null
                 : () async {
+                    final channel = _notificationChannel;
+                    if (channel != null) {
+                      await Supabase.instance.client.removeChannel(channel);
+                      _notificationChannel = null;
+                    }
+                    await PushRegistrationManager.instance.stop();
                     await sessionController.signOut();
                   },
             icon: const Icon(Icons.logout),
@@ -54,6 +124,22 @@ class HomeScreen extends StatelessWidget {
             const SizedBox(height: 8),
             Text(roleLabel),
             const SizedBox(height: 24),
+            const PendingActionsPanel(),
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.notifications_outlined),
+                title: const Text('Notifications'),
+                subtitle: const Text(
+                  'Review your alerts and delivery preferences.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await _openNotifications();
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.person_outline),
@@ -93,14 +179,65 @@ class HomeScreen extends StatelessWidget {
             if (profile.role == UserRole.systemAdministrator) ...[
               Card(
                 child: ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Bakery and Prediction Settings'),
+                  subtitle: const Text(
+                    'Edit validated bakery details and prediction factors.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SettingsScreen(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.event_outlined),
+                  title: const Text('Calendar Events'),
+                  subtitle: const Text(
+                    'Record sourced holidays and local events for predictions.'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const CalendarScreen(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.history_outlined),
+                  title: const Text('Audit History'),
+                  subtitle: const Text(
+                    'Review recorded user and system actions.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AuditScreen(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
                   leading: const Icon(Icons.inventory_outlined),
                   title: const Text('Inventory Administration'),
-                  subtitle: const Text('Manage bread categories, recipes, ingredients and batches.'),
+                  subtitle: const Text(
+                    'Manage bread categories, recipes, ingredients and batches.',
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
-                    await Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => const InventoryAdminScreen(),
-                    ));
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const InventoryAdminScreen(),
+                      ),
+                    );
                   },
                 ),
               ),
@@ -163,6 +300,85 @@ class HomeScreen extends StatelessWidget {
                 ),
               ),
             ],
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.point_of_sale_outlined),
+                title: const Text('POS Simulation'),
+                subtitle: Text(
+                  profile.role == UserRole.bakeryManager
+                      ? 'Run confirmed production and review simulated sales.'
+                      : 'Review completed simulated sales.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => PosSimulationScreen(role: profile.role),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.volunteer_activism_outlined),
+                title: const Text('Leftovers and Donations'),
+                subtitle: Text(
+                  profile.role == UserRole.bakeryManager
+                      ? 'Allocate simulated leftovers and update donation progress.'
+                      : 'Review completed leftover allocations.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          LeftoverManagementScreen(role: profile.role),
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (profile.role == UserRole.systemAdministrator) ...[
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.handshake_outlined),
+                  title: const Text('Charity Partners'),
+                  subtitle: const Text(
+                    'Add, update and deactivate donation partners.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const CharityPartnersScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.assessment_outlined),
+                title: const Text('Dashboard and Reports'),
+                subtitle: const Text(
+                  'Review simulated results and save filtered CSV or PDF reports.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ReportsScreen(),
+                    ),
+                  );
+                },
+              ),
+            ),
             if (isSigningOut) ...[
               const SizedBox(height: 24),
               const Center(child: CircularProgressIndicator()),

@@ -5,6 +5,7 @@ import { isCalendarDate } from "./history-selection.service.js";
 import { parsePredictionRules, resolvePredictionContext } from "./prediction-context.js";
 import type { PredictionHistoryService } from "./prediction-history.service.js";
 import type { PredictionRepo } from "./prediction.repo.js";
+import type { WeatherService } from "./weather.service.js";
 
 type DataRepo = Pick<PredictionRepo,
   "getBakeryTimezone" | "listActiveCategories" | "listActiveModels" |
@@ -35,6 +36,7 @@ export class PredictionOrchestrationService {
     private readonly providedHistory?: HistoryReader,
     private readonly providedMl?: MlAdapter,
     private readonly now: () => Date = () => new Date(),
+    private readonly providedWeather?: Pick<WeatherService, "cacheNextDay">,
   ) {}
 
   private async repo(): Promise<DataRepo> {
@@ -68,13 +70,13 @@ export class PredictionOrchestrationService {
       throw new AppError(400, "VALIDATION_ERROR", "A valid targetDate is required.");
     }
     const repo = await this.repo();
-    const targetDate = tomorrowInBakery(this.now(),
-      await repo.getBakeryTimezone());
+    const timezone = await repo.getBakeryTimezone();
+    const targetDate = tomorrowInBakery(this.now(), timezone);
     if (requested !== undefined && requested !== targetDate) {
       throw new AppError(400, "INVALID_PREDICTION_DATE",
         "Generate predictions for the next bakery date.");
     }
-    const [categories, activeModels, context, alreadyStored] = await Promise.all([
+    const [categories, activeModels, initialContext, alreadyStored] = await Promise.all([
       repo.listActiveCategories(), repo.listActiveModels(),
       repo.getContextData(targetDate), repo.hasPredictionForDate(targetDate),
     ]);
@@ -85,6 +87,17 @@ export class PredictionOrchestrationService {
     if (categories.length === 0) {
       throw new AppError(409, "NO_ACTIVE_CATEGORIES",
         "Ask the System Administrator to configure an active bread category.");
+    }
+    let context = initialContext;
+    if (!context.weather) {
+      const weather = this.providedWeather ?? new (await import(
+        "./weather.service.js")).WeatherService();
+      try {
+        await weather.cacheNextDay(actorUserId, targetDate, timezone);
+        context = await repo.getContextData(targetDate);
+      } catch {
+        // Context resolution below applies only an explicit configured fallback.
+      }
     }
     const threshold = context.confidenceThreshold;
     if (typeof threshold !== "number" || !Number.isFinite(threshold) ||

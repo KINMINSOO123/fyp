@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Reconciled:** 2026-10-11 using the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.5.3–4.5.4, 4.6–4.9, including Tables 4.25–4.27. **Status:** design and future verification only. The repository currently has a Flutter starter and plans; none of the classes, endpoints, DTO sketches or workflows below is a claim of implemented functionality. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) is a navigation aid.
+**Reconciled:** 2026-10-11 using the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 3.4–3.6, 4.5.3–4.5.4, 4.6–4.9, including Tables 4.25–4.27. **Current status, 2026-11-09:** Node leftover, charity and report endpoints; Flutter allocation/status, charity and report screens; and staged allocation/report SQL migrations are implemented locally. The migrations have not been applied or verified live. Recipient-notification functions remain planned. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) is a navigation aid.
 
 ## 1. Functional scope and dependencies
 
@@ -20,12 +20,11 @@ The single-bakery Android design uses configured active categories, with up to 2
 | `LeftoverManagementService` | Check completed-result eligibility, quantity/partner/reason rules, manager confirmation, remaining balance and status transition |
 | `DailyResultRepo`, `DonationRepo`, `WasteRecordRepo` | Execute result locking and allocation inserts/balance changes using the same transaction/RPC context |
 | `CharityPartnerController -> CharityPartnerService -> CharityPartnerRepo` | Administrator-managed active partner catalogue and retained historical links |
-| `DashboardController -> DashboardService -> ReportRepo` | Compose permitted summaries; a read does not trigger operational processing |
-| `ReportController -> ReportService -> ReportRepo` | Filter and calculate one consistent report model for display/export |
-| `ReportExportAdapter` | Render the calculated report as supported CSV/PDF without querying or changing source records |
+| `ReportController -> ReportService -> ReportRepo` | Implemented locally: dashboard and report share one read-only model; filtered day/week/custom/category summaries from completed results |
+| `ReportExportAdapter` | Implemented locally: render the same report object as CSV/PDF without new source reads or mutations |
 | `AuditService`, `NotificationService` | Audit mutations; notify authorized recipients of surplus/status/error events after successful business commit |
 
-`ManagerDashboardView` presents prediction, production decision, simulation and leftover actions with explicit prerequisites. `AdministratorDashboardView` presents permitted reports and administration links; it does not expose manager action buttons. `LeftoverManagementView` presents confirmed leftovers and forms; `DonationStatusView` presents history and permitted transitions; `CharityPartnersView` is administrator-only; `ReportsView` contains period/category filters and manual export. Both roles retain `ProfileView`, `NotificationsView` and personal preferences from Module 1.
+The home screen presents role-permitted prediction, production, simulation, leftover and administration links. `LeftoverManagementScreen` presents confirmed leftovers and forms; `CharityPartnersScreen` is administrator-only; `ReportsScreen` gives both roles period/category filters, summary cards, 50-row pages and manual Android Downloads CSV/PDF export. Personal notification preferences remain planned.
 
 Use `ApiClient` for protected Node requests. Flutter uses Supabase Authentication, recipient-scoped Supabase Realtime for notification events and FCM background notification reception as explicit report exceptions; these do not grant direct ordinary-table CRUD. Express router modules remain separate from Controller classes.
 
@@ -34,23 +33,27 @@ Use `ApiClient` for protected Node requests. Flutter uses Supabase Authenticatio
 The allocation chain is `DailyPrediction -> ProductionDecision -> DailyProduction -> DailyResult -> Donation/WasteRecord`. Unique prediction/decision/production/result references enforce at most one applicable operational row at each step. Donation and waste category/date are resolved from `daily_result_id`; allocations do not carry another independently editable category reference. There is no persisted `LeftoverRecord` or `SimulationRun` entity.
 
 ```ts
-// Proposed API types; identifiers are validated UUIDs and quantities positive integers.
+// Current Node API shape; identifiers are validated UUIDs and quantities positive integers.
 type RecordDonationRequest = {
   dailyResultId: string;
   quantity: number;
   charityPartnerId: string;
+  notes?: string | null;
+  confirm: true;
 };
 type RecordWasteRequest = {
   dailyResultId: string;
   quantity: number;
   disposalReason: string;
+  confirm: true;
 };
 type DonationStatus = 'PENDING' | 'COLLECTED' | 'COMPLETED' | 'CANCELLED';
-type DonationStatusRequest = { status: DonationStatus };
+type DonationStatusRequest = { status: 'COLLECTED' | 'COMPLETED'; confirm: true };
 type LeftoverSummary = {
   dailyResultId: string;
   breadCategoryId: string; // derived from DailyResult, never a second allocation FK
-  resultDate: string;
+  breadCategoryName: string;
+  date: string;
   produced: number;
   unitsSold: number;
   leftover: number;
@@ -69,32 +72,33 @@ Use canonical snake_case storage fields such as `daily_result_id`, `charity_part
 
 | Method/path | Permission | Service operation |
 |---|---|---|
-| `GET /api/leftovers?date=...&breadCategoryId=...` | Both active roles, permitted read | `LeftoverManagementService.listSummaries` from completed results |
-| `GET /api/leftovers/:resultId/recommendation` | Manager | `recommendAction`; no persistence/allocation |
-| `POST /api/donations` | Manager | `recordDonation` with active partner and explicit confirmation |
+| `GET /api/leftovers?date=...&breadCategoryId=...` | Both active roles, permitted read | `LeftoverManagementService.list` from completed results |
+| `GET /api/leftovers/:resultId/recommendation` | Manager | `LeftoverManagementService.recommendation`; no persistence/allocation |
+| `POST /api/donations` | Manager | `LeftoverManagementService.donate` with active partner and explicit confirmation |
 | `POST /api/waste-records` | Manager | `recordWaste` with reason and explicit confirmation |
-| `PATCH /api/donations/:id/status` | Manager | `updateDonationStatus`; server checks transition, records update time/audit |
+| `PATCH /api/donations/:donationId/status` | Manager | `LeftoverManagementService.advanceDonation`; server checks transition, records update time/audit |
 | `GET/POST /api/admin/charity-partners`; `PATCH /api/admin/charity-partners/:id` | Administrator | List/create/update/deactivate; retain referenced partners |
-| `GET /api/dashboard?date=...&breadCategoryId=...` | Both active roles | `DashboardService.getSummary`; role-permitted DTO |
-| `GET /api/reports?period=WEEKLY&startDate=...&endDate=...&breadCategoryId=...` | Both active roles | `ReportService.generate`; selected period/category |
+| `GET /api/dashboard?period=DAY&date=...&breadCategoryId=...` | Both active roles | `ReportService.get`; same read-only report DTO, defaulting to bakery-local today |
+| `GET /api/reports/categories` | Both active roles | `ReportService.categories`; active and historical category names for filters |
+| `GET /api/reports?period=WEEK&date=...&breadCategoryId=...` or `period=CUSTOM&fromDate=...&toDate=...` | Both active roles | `ReportService.get`; Monday–Sunday week or inclusive custom range |
 | `GET /api/reports/export` with the same filters and `format=CSV` or `PDF` | Both active roles | Same `ReportService` calculation, then `ReportExportAdapter` |
 
-Report filters may select a date, supported reporting period or explicit date range and one category or all categories. Validate invalid/inverted periods and pagination; seven-day reports are supported. Explicit ranges use inclusive bakery-local dates and unambiguous timestamps in exports. The selected range, not a hard-coded calendar-week assumption, defines a weekly request. Backend validation prevents one invalid client query from changing underlying records.
+Report filters select `DAY` (default), `WEEK` anchored on a selected date and expanded to Monday–Sunday, or `CUSTOM` with inclusive `fromDate`/`toDate`, plus one category or all categories. The server rejects invalid dates, inverted or longer-than-366-day ranges, unknown fields and future starts. A weekly period is always seven days; a custom range can select any seven days. Backend validation does not change source records.
 
 Manager forms receive only eligible active charity choices through the leftover response/read contract; this does not expose the administrator charity endpoints. System Administrators may review reports but cannot use manager-only allocation or status mutation endpoints. Backend permission tests must verify this even if the Flutter UI hides the button.
 
 ## 5. Transactional leftover allocation
 
-`LeftoverManagementService.recommendAction` reads completed leftovers and configured handling rules. It returns a suggestion and reason; it cannot create a donation/waste record, choose a charity on behalf of the manager or schedule an allocation. If recommendation data are unavailable, explain the issue and allow a permitted manual choice with normal validation. With no completed result or no remaining quantity, prevent allocation.
+`LeftoverManagementService.recommendation` reads completed leftovers and active charity choices. It returns a manager-review prompt and never creates a donation/waste record, chooses a charity for the manager or schedules an allocation. With no completed result or no remaining quantity, allocation is unavailable.
 
-The mutation sequence is proposed as one Node-owned database transaction/RPC:
+The staged `allocate_leftover_with_audit` RPC implements this one-transaction mutation sequence:
 
 1. Validate JWT, active manager role, UUIDs, positive integer quantity and required partner/reason input.
 2. Lock the referenced DailyResult and inspect its completed production/simulation links. Derive category/date from that row.
 3. Read committed donation/waste allocations under the same result lock; recompute remaining quantity and verify the stored/cache invariant.
 4. For donation, lock or otherwise consistently validate that the selected charity is active at commit. For waste, validate a nonblank disposal reason.
 5. Reject the request if it exceeds remaining quantity. Insert the donation (`PENDING`) or waste record with the authenticated manager and timestamp.
-6. Update remaining unallocated quantity and audit in the same transaction. Commit all or roll back all. Only then deliver eligible recipient notification events.
+6. Update remaining unallocated quantity and audit in the same transaction. Commit all or roll back all. Recipient notification events after commit remain planned.
 
 ```text
 leftover = produced - units_sold
@@ -105,11 +109,11 @@ leftover = donated + wasted + remaining_unallocated
 
 Locking the common result serializes competing donation/waste requests even if they target different allocation tables. If leftover is 10, simultaneous donation of 7 and waste of 6 cannot both succeed. Each operation must re-read the balance after acquiring the lock; a client-displayed balance is insufficient. Positive quantity validation excludes zero/negative requests, and all source quantity totals remain nonnegative.
 
-The client retains form inputs after a network error and refreshes the result/history before retrying an uncertain mutation; it must not silently issue a second allocation after an unknown commit outcome. The canonical plan does not add idempotency tables to solve this. Audit and record IDs allow the UI to inspect the completed request. Any future retry-key design must be specified explicitly before automatic retry is enabled.
+The client never automatically retries an uncertain mutation. After a network error, the manager must refresh the result/history before deciding whether to submit a new allocation. The current dialog closes on submission, so preserving its inputs after an uncertain response remains a UI improvement. The canonical plan does not add idempotency tables to solve this. Any future retry-key design must be specified explicitly before automatic retry is enabled.
 
 ## 6. Donation status and unresolved cancellation policy
 
-Canonical donation status values are `PENDING`, `COLLECTED`, `COMPLETED`, `CANCELLED`. The planned normal workflow is manager-recorded `PENDING -> COLLECTED -> COMPLETED`, with explicit confirmation, server validation, updated timestamp and audit. A status update records progress; it does not create another donation or subtract the quantity again. Ordinary progress does not change the allocation balance.
+Canonical donation status values are `PENDING`, `COLLECTED`, `COMPLETED`, `CANCELLED`. The staged `advance_donation_status_with_audit` RPC implements manager-recorded `PENDING -> COLLECTED -> COMPLETED`, with explicit confirmation, server validation, updated timestamp and audit. A status update records progress; it does not create another donation or subtract the quantity again. Ordinary progress does not change the allocation balance.
 
 | Retired donation term | Current donation term |
 |---|---|
@@ -125,7 +129,7 @@ Donation-status events use `NotificationService` with intended recipients, type 
 
 ## 7. Dashboard and confidence presentation
 
-`DashboardService` composes committed data and `PendingActionService` state; reading or refreshing the dashboard never generates prediction, confirms production, starts simulation, retrains a model or allocates leftovers. Display dates and prerequisites clearly. Current date is the simulation default; next-day prediction remains an explicit manager action.
+The current `ReportsScreen` uses `ReportService` for the completed-result dashboard. Reading or refreshing it never generates prediction, confirms production, starts simulation, retrains a model or allocates leftovers. The broader cross-module dashboard below, including request-derived pending-action indicators, remains planned. Current date is the simulation default; next-day prediction remains an explicit manager action.
 
 | View area | Display and action responsibility |
 |---|---|
@@ -187,13 +191,13 @@ The authorized user selects date/period/range, category or All, and export forma
 
 | Concern | CSV | PDF |
 |---|---|---|
-| Content | UTF-8 header and structured rows with raw numeric values | Title, filters, summary cards, tables, explanatory notes and supported charts |
-| Dates | Consistent ISO dates | Human-readable bakery-local dates and generation timestamp |
+| Content | UTF-8 header and structured rows with raw numeric values | Title, filters, totals, paginated category/day rows and explanatory labels; charts remain planned |
+| Dates | Consistent ISO dates | ISO bakery-local report dates and generation timestamp |
 | Provenance | Exact `data_origin` values; explicit simulated-record identification | Visible Simulated Data label/note wherever simulation results are included |
 | Undefined percentage | Blank/null numeric cell plus Not Applicable status | Not Applicable |
 | Finance | Snapshot-derived numeric values, signed where meaningful | Malaysian Ringgit formatting without changing calculations |
 
-Use a predictable sanitized filename, for example `BakeSmart_Weekly_Report_2026-10-05_to_2026-10-11.pdf`. Paginate long PDFs and include report date/page information. Return files on demand to Android for viewing/saving/sharing; remove temporary server files after delivery where used. Include no credentials, tokens, internal model files or unpermitted user details. On error, explain the failure and preserve selected filters for manual retry.
+Use a predictable sanitized filename such as `Smart_Bakery_WEEK_2026-11-02_to_2026-11-08.pdf`. The local PDF renderer paginates rows and includes report date/page information; the Android channel saves on-demand files to Downloads / Smart Bakery. Opening or sharing through a system chooser remains an enhancement. No temporary server files are created. Exports include no credentials, tokens, internal model files or unpermitted user details. On error, explain the failure and preserve selected filters for manual retry.
 
 ## 10. Planned verification
 
@@ -213,14 +217,12 @@ Use a predictable sanitized filename, for example `BakeSmart_Weekly_Report_2026-
 | Weekly/category-filtered UI, CSV and PDF | Matching totals/formulas/null handling, date filters and origin labels |
 | 20 active categories and 50 rows/list; seven-day report | Module 6 performance/UI acceptance targets apply |
 
-## 11. Planned implementation order
+## 11. Implemented locally and remaining work
 
-1. Align normalized allocation DTOs, statuses, field mappings and shared report formulas with Module 0.
-2. Plan `DailyResultRepo`/allocation transaction participation, charity validation and audit before write endpoints.
-3. Add manager allocation/status Services and administrator charity Services; leave cancellation policy visibly unresolved.
-4. Build `ReportRepo` queries with correct aggregation grain and price/FEFO cost snapshots; build the common report model and CSV/PDF adapter.
-5. Add protected Controllers and role-specific Views, confidence/null rendering, filter validation and explicit confirmations.
-6. Integrate recipient notifications and request-derived pending actions; no automatic allocation or timed scheduler.
-7. Execute the planned allocation, permission, reporting, export, compatibility and usability checks from [Module 6](../operation_reminders_testing/README.md). No such implementation tests are executed in this documentation task.
+1. Implemented locally: normalized allocation DTOs, manager-only allocation/status Services, administrator charity Service, protected Controllers, Flutter confirmation screens, and staged locked SQL RPCs with audit. Cancellation policy remains open; no cancellation mutation or automatic donation exists.
+2. Apply and verify the staged migration against the real schema, especially concurrent allocations, active-charity changes, balance reconciliation and full rollback. Local backend validation/role tests have run; live SQL has not.
+3. Implemented locally: `report_result_summary` uses one completed category/day and preaggregated allocations; `ReportRepo` pages up to 366-day ranges; `ReportService` computes totals and null-aware rates; the export adapter produces CSV/PDF from the same model. Apply and verify the staged report view after the allocation migration; Android device export and live query performance are not yet verified.
+4. Integrate recipient notifications and request-derived pending actions; no automatic allocation or timed scheduler.
+5. Execute remaining reporting, export, compatibility and usability checks from [Module 6](../operation_reminders_testing/README.md).
 
 The unresolved donation-cancellation/reallocation policy is recorded in the [change report](../../planning_documents_change_report.md). It does not authorize an invented release rule or automatic donation workflow.

@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Build order:** second, after Module 0. **Design audit:** 2026-10-11. **Implementation status on 2026-11-04:** authentication/profile/administrator-account, model lifecycle/review, manager prediction and production planning/confirmation, and administrator inventory have Node code and automated tests. Five model/prediction SQL migrations and two inventory/production RPC migrations are staged but not applied or verified live; external context adapters and later operational modules remain planned. The latest `RSW_SooKinMin_Project1 (1).docx` is the report authority. See Sections 3.4–3.6, 4.2, 4.5, 4.8 and 4.9.
+**Build order:** second, after Module 0. **Design audit:** 2026-10-11. **Historical implementation snapshot:** the 2026-11-04 authentication, prediction, production and inventory update preceded later POS, leftover, reporting and notification work. **Current local status (2026-11-10):** recipient notification/pending-action, allowlisted settings, read-only audit and nonsecret service-status Node endpoints are coded and locally tested. A request-driven next-day OpenWeather adapter and source-referenced administrator calendar entry are coded and locally tested. Their SQL migrations are staged; live DB, weather-provider, FCM, Realtime and device behavior remain unverified. The latest `RSW_SooKinMin_Project1 (1).docx` is the report authority. See Sections 3.4–3.6, 4.2, 4.5, 4.8 and 4.9.
 
 ## 1. Responsibility and functional-module mapping
 
@@ -17,14 +17,13 @@ Flutter business requests follow `View -> Controller -> Service -> Repo/Adapter`
 | Authentication middleware; `UserProfileRepo` | Verify JWT signature, issuer, audience and expiry; load active profile before permission checks |
 | `ProfileController` / `ProfileService` / `UserProfileRepo` | Own-profile reads and permitted edits; `AuthAdminAdapter` coordinates provider-managed identity changes |
 | `UserAdministrationController` / `UserAdministrationService` / `UserProfileRepo` / `AuthAdminAdapter` | Administrator account creation, role/status changes and final-active-administrator protection |
-| `SettingsController` / `SettingsService` / `BakerySettingsRepo` / `SystemSettingsRepo` | Singleton bakery settings, allowlisted typed parameters and nonsecret external-service configuration |
-| `AuditController` / `AuditService` / `SystemLogRepo` | Append-only audit records and administrator-filtered read access |
-| `WeatherService`, `CalendarService`, `ContextService`; `WeatherRepo`, `CalendarRepo`; `OpenWeatherMapClient`, `NagerDateClient` | Cached, validated date context with identified fallback and retry; calendar traceability through `prediction_calendar_events` |
+| `AdministrationController` / `AdministrationService` / `AdministrationRepo` | Current singleton bakery settings, two allowlisted prediction settings, nonsecret service status and read-only paginated audit; the staged RPC owns atomic settings/audit writes |
+| Weather and calendar context | `WeatherService -> OpenWeatherMapClient -> WeatherRepo` fetches and caches next-day forecast if configured; `CalendarController -> CalendarService -> CalendarRepo` records administrator-sourced events. `PredictionOrchestrationService` resolves stored context or an explicitly configured fallback. There is no automated Malaysia holiday provider or claim of verified non-event coverage. |
 | `PredictionOrchestrationService` / `FastApiMlClient` | Validated units-sold history and context to Python; validated predictions persisted by Node |
 | `ModelManagementService` / `FastApiMlClient` | Separate candidate training, evaluation, explicit activation and restoration |
 | `NotificationController` / `NotificationService` | Recipient authorization, per-type preferences, notification persistence and eligible push attempts |
-| `NotificationRepo`, `NotificationPreferenceRepo`, `FcmTokenRepo`, `NotificationDeliveryRepo`, `FcmPushAdapter` | Recipient read state, recipient-owned active tokens and delivery-attempt history |
-| `PendingActionController` / `PendingActionService` | Read current pending actions on app open/refresh; no timer or operational execution |
+| `NotificationRepo`, `NotificationEventRepo`, `FcmPushAdapter` | Recipient read state, preferences, owned tokens, event insertion and per-device delivery-attempt history; current Node implementation |
+| `PendingActionController` / `PendingActionService` / `PendingActionRepo` | Read current pending actions on app open/refresh; no timer or operational execution |
 
 ## 3. Permissions and endpoints
 
@@ -34,11 +33,12 @@ Every protected endpoint requires a valid JWT and `user_profiles.account_status 
 |---|---|
 | `GET/PATCH /api/profile` | Both roles; authenticated user's permitted profile fields only |
 | `GET/POST /api/admin/users`; `PATCH /api/admin/users/:id` | Administrator; create accounts or change permitted profile/role/status fields; preserve final active administrator |
-| `GET/PATCH /api/admin/settings`; `GET /api/admin/service-status` | Administrator; validated settings and nonsecret connectivity status |
-| `GET /api/admin/audit` | Administrator; filters by date, event, user and outcome; no log edit/delete |
-| `GET /api/notifications`; `PATCH /api/notifications/:id/read` | Both roles; own recipient rows only |
-| `GET/PATCH /api/notification-preferences`; `POST/DELETE /api/fcm-tokens` | Both roles; own type preferences and device registration/deactivation |
+| `GET /api/admin/settings`; `PATCH /api/admin/settings/bakery`; `PATCH /api/admin/settings/:key`; `GET /api/admin/service-status` | Administrator; validated bakery/prediction settings and nonsecret DB/ML reachability/configuration status |
+| `GET /api/admin/audit` | Administrator; UTC date, event, actor and outcome filters; 50-row pages; no log edit/delete |
+| `GET /api/notifications`; `PATCH /api/notifications/:notificationId/read`; `GET /api/notifications/:notificationId/deliveries` | Both roles; own recipient rows and delivery history only |
+| `GET/PATCH /api/notification-preferences`; `POST /api/fcm-tokens`; `DELETE /api/fcm-tokens/:tokenId` | Both roles; own type preferences and device registration/deactivation |
 | `GET /api/pending-actions` | Both roles; derived pending state restricted to permitted actions |
+| `POST /api/admin/inventory/scan-alerts` | Administrator only; explicitly scan stock/expiry state and emit recipient events |
 | `POST /api/predictions`; `GET /api/recommendations/:date`; `PUT /api/production-decisions`; `POST /api/simulations` | Manager only; Modules 2–4 provide business rules |
 | `POST /api/admin/models/train`; `POST /api/admin/models/:id/evaluate`, `/activate`, `/restore` | Administrator only; no automatic activation |
 | `POST /api/donations`; `POST /api/waste-records`; `PATCH /api/donations/:id/status` | Manager only; Module 5 validates allocation/status |
@@ -64,13 +64,13 @@ Foreground Flutter receives relevant notification events through Supabase Realti
 
 Push is submitted only after preference and token checks and after the in-app record commits. `notification_deliveries` tracks `PENDING`, `SUBMITTED`, `DELIVERED`, `FAILED`, `SKIPPED`. Provider acceptance is `SUBMITTED`; `DELIVERED` needs delivery evidence. Failure preserves the in-app record. No active daily timed reminders or background scheduling are planned.
 
-## 6. Build order and planned verification
+## 6. Build order and remaining verification
 
 1. Adopt Module 0's current schema and discriminated DTOs; establish error handling and server-only configuration.
 2. Plan JWT/profile authorization, own-profile edits, user administration and atomic final-administrator protection before business endpoints.
 3. Add settings and audit boundaries, then contextual adapters and validated ML contracts.
-4. Add recipient notification Repos, Node read/write APIs, scoped Realtime policy and eligible FCM delivery handling.
-5. Connect Modules 2–5 controllers, transaction-owning Repos and pending-state queries; expose corresponding role-specific Views.
-6. Verify unauthorized/inactive requests, cross-role rejection, forged actor fields, concurrent final-admin changes, settings validation, null cold-start confidence, recipient isolation, opt-in push and delivery-state transitions. Use [Module 6's planned checks](../operation_reminders_testing/README.md); none have been executed as part of this documentation change.
+4. Add recipient notification Repos, Node read/write APIs, scoped Realtime policy and eligible FCM submission handling (coded locally); apply the staged event-key migration in the target database.
+5. Connect Modules 2–5 controllers, transaction-owning Repos and pending-state queries; complete settings/audit administration and external context adapters where still pending.
+6. Verify unauthorized/inactive requests, cross-role rejection, forged actor fields, concurrent final-admin changes, settings validation, null cold-start confidence, two-user Realtime isolation, opt-in push and delivery-state transitions. Local automated checks cover selected cases; live and UAT evidence in [Module 6](../operation_reminders_testing/README.md) is still pending.
 
 See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [canonical schema](../../database_canonical_design.md) and [traceability/change report](../../planning_documents_change_report.md).

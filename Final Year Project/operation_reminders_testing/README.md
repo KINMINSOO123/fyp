@@ -2,13 +2,13 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 1.4, 3.4.4–3.6, 4.5.3–4.5.4, 4.7–4.10 and Table 4.27. **Status:** planned acceptance criteria and test procedures, not executed tests or completed results. The repository contains a Flutter starter and design Markdown. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) supports navigation; the DOCX is the authority.
+**Reconciled:** 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 1.4, 3.4.4–3.6, 4.5.3–4.5.4, 4.7–4.10 and Table 4.27. **Local status, 2026-11-09:** Node and Flutter pending-action/notification flows are coded with focused automated checks. The tables and recipient Realtime policy were created earlier; the new event-key migration is staged. Live push delivery, Realtime behavior, device UI, NFR measurements and UAT are not claimed. The [report mirror](../../RSW_SooKinMin_Project1.docx.md) supports navigation; the DOCX is the authority.
 
 ## 1. Scope, dependencies and evidence
 
 Technical Module 6 integrates request-derived pending indicators and tests all eight functional modules. It depends on Module 0 schema/contracts; Module 1 authentication, administration, notification and external-adapter boundaries; Module 2 prediction/model lifecycle; Module 3 joint ingredient planning/FEFO; Module 4 atomic simulation; and Module 5 allocation/reporting. It does not add a ninth functional module or replace the report's eight-module mapping.
 
-Each future test record should contain the BR/FR/NFR IDs, dataset/fixture, authenticated role, action, expected result, actual result, environment and evidence reference. Preserve failures and unavailable measurements; do not manufacture achieved accuracy, timing or UAT results. Vitest/pytest/Flutter testing may be used when implementation exists, but this task does not install packages, create executable tests, migrate a database or deploy services.
+Each future test record should contain the BR/FR/NFR IDs, dataset/fixture, authenticated role, action, expected result, actual result, environment and evidence reference. Preserve failures and unavailable measurements; do not manufacture achieved accuracy, timing or UAT results. Local Node tests are separate from the pending live, device and UAT evidence.
 
 ## 2. Pending-action contract and event delivery
 
@@ -19,6 +19,8 @@ Invoke the read when the user opens/refreshes the application or explicitly requ
 There is no current-scope timed scheduler, daily 06:00/18:00 reminder promise, automatic donation or automatic model retraining. Timed reminders remain future work. Foreground Supabase Realtime and background FCM deliver eligible events; neither executes the pending business action.
 
 Events cover low stock, expiring/expired batches, low confidence, lost sales, excessive surplus, donation-status changes and external/system failures. `NotificationService` selects intended authorized recipients, stores per-recipient notifications, checks per-type preferences and recipient-owned valid active tokens, and tracks per-device delivery attempts. All notification writes/read-state changes use Node. Recipient-scoped authenticated SELECT for notification Realtime is the explicit limited exception to normal application-table access restrictions.
+
+The current local endpoints are `GET /api/notifications`, `PATCH /api/notifications/:notificationId/read`, `GET /api/notifications/:notificationId/deliveries`, `GET/PATCH /api/notification-preferences`, `POST /api/fcm-tokens`, `DELETE /api/fcm-tokens/:tokenId`, `GET /api/pending-actions` and administrator-only `POST /api/admin/inventory/scan-alerts`. Low-stock/expiry events are scanned only on that explicit administrator request. Notification event keys are unique per recipient/type after the staged migration is applied. The current FCM adapter records provider acceptance as `SUBMITTED`; it has no delivery callback, so `DELIVERED` remains a schema state for future verified delivery evidence. Event hooks are best effort after operational commits, not a durable outbox.
 
 ## 3. Manual end-to-end scenario
 
@@ -33,7 +35,7 @@ Events cover low stock, expiring/expired batches, low confidence, lost sales, ex
 9. Request `GET /api/reports` and `/api/reports/export` with a seven-day range/category filter and CSV/PDF format. Verify common calculations, origins, signed/undefined values and no duplicate aggregation.
 10. Inspect recipient notifications through Node and foreground Realtime; background push occurs only for eligible preferences/tokens with independently tracked delivery status. Deactivate an account and prove subsequent protected operations are rejected.
 
-This scenario is a future test script, not a demonstration that those functions already exist.
+This scenario is an end-to-end acceptance script. Local implementation and unit tests cover parts of it; live database, device, delivery, performance and UAT results must be recorded only after execution.
 
 ## 4. Access, administration and configuration checks
 
@@ -163,4 +165,4 @@ External-service failures are assessed separately under NFR-REL-03 with visible 
 6. Execute the manual end-to-end scenario, then reference-environment performance, Android layouts and independent UAT.
 7. Record actual outcomes/evidence and unresolved defects; preserve truthful historical audit dates and distinguish plans from results.
 
-Donation cancellation/reallocation remains an explicit open decision in the [change report](../../planning_documents_change_report.md). First activation requires valid candidate evaluation, administrator review and explicit confirmation. Re-simulation with exact atomic reversal and timed reminders remain future work. This documentation reconciliation runs no implementation tests and invents no Chapters 5/6 implementation or evaluation results.
+Donation cancellation/reallocation remains an explicit open decision in the [change report](../../planning_documents_change_report.md). First activation requires valid candidate evaluation, administrator review and explicit confirmation. Re-simulation with exact atomic reversal and timed reminders remain future work. The October documentation reconciliation was planning-only; the November local implementation has automated checks but no claimed live delivery, UAT or Chapter 5/6 evaluation results.

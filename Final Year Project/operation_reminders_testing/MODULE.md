@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Build order:** seventh, integrating Modules 0–5. **Status:** proposed workflow and test plan, reconciled 2026-10-11 with the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4, 3.4–3.6, 4.2, 4.5, 4.8–4.10. No test results, completed implementation or UAT outcomes are claimed. See the [report mirror](../../RSW_SooKinMin_Project1.docx.md) for navigation.
+**Build order:** seventh, integrating Modules 0–5. **Design audit:** reconciled 2026-10-11 with the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4, 3.4–3.6, 4.2, 4.5, 4.8–4.10. **Local implementation update (2026-11-09):** request-derived pending indicators, recipient notification APIs, event hooks, manual inventory alert scanning, Flutter notification/preferences Views and optional FCM submission are coded. The event-key migration is staged, not applied here. Live Realtime/FCM delivery, Android device behavior, performance and UAT remain unverified. See the [report mirror](../../RSW_SooKinMin_Project1.docx.md) for navigation.
 
 ## 1. Scope and functional mapping
 
@@ -54,13 +54,13 @@ Record measured timings, device/network/dataset conditions and actual UAT partic
 | Notifications | Recipient isolation through Node and Realtime; read/dedup per user; type opt-in and token ownership; delivery state evidence; push failure retains in-app record |
 | Manual workflow | Open/refresh derives indicators without operations; time passage alone triggers nothing; manager/admin action separation |
 
-## 6. Planned implementation/verification order
+## 6. Implementation and verification order
 
 1. Adopt the current report traceability and Module 0 schema/DTO contracts; prepare deterministic fixtures and reference performance data.
 2. Plan access, administration, provenance and pure calculation checks alongside their modules.
 3. Add transaction/concurrency/failure-injection verification for shared ingredients, simulation and allocations.
-4. Integrate request-derived pending indicators and event notification delivery/isolation.
-5. Run end-to-end manual role workflows, export parity, NFR performance, Android layout/compatibility and independent UAT when implementation exists.
+4. Integrate request-derived pending indicators and recipient event handling (coded locally); apply the staged event-key migration and configure Firebase credentials in the target environment before live notification checks.
+5. Verify recipient isolation and actual Realtime/FCM behavior on two accounts and Android devices; run end-to-end role workflows, export parity, NFR performance, Android layout/compatibility and independent UAT.
 6. Record actual evidence and unresolved defects without rewriting plans as completed results.
 
-See the [detailed test plan](README.md) and [traceability/change report](../../planning_documents_change_report.md). This reconciliation edits Markdown only; no tests, package installation, migration or deployment are requested or performed.
+See the [detailed test plan](README.md) and [traceability/change report](../../planning_documents_change_report.md). The October reconciliation was a Markdown-only audit; this November update records later local application work without claiming live deployment or completed UAT.

@@ -174,6 +174,8 @@ Value/type CHECK:
 
 Only defined non-secret keys may be stored. Weather, calendar and FCM credentials remain in protected Node server environment variables or a secret manager. Non-secret endpoints, locations, enablement flags and thresholds may use this table.
 
+The current administrator API (local code, 2026-11-10) edits only `prediction.low_confidence_threshold` and `prediction.context_rules`; it does not offer arbitrary key/value writes. The staged `20261109000500_admin_settings_with_audit.sql` also validates the active administrator and writes each approved setting change with its audit record atomically. Provider configuration beyond those two keys is future implementation, not an enabled generic editor.
+
 ### 5.2 Catalogue and inventory
 
 #### `bread_categories`
@@ -586,6 +588,7 @@ The view joins `sales_transactions` to `daily_results`, then groups by `daily_re
 | `id` | `uuid` | NOT NULL; default `gen_random_uuid()` | PK |
 | `recipient_user_id` | `uuid` | NOT NULL | FK → `user_profiles.user_id` ON DELETE RESTRICT |
 | `notification_type` | `text` | NOT NULL | CHECK canonical notification types |
+| `event_key` | `text` | NULL | Per-source occurrence key; UNIQUE (`recipient_user_id`, `notification_type`, `event_key`) when present; staged 2026-11-09 migration |
 | `severity` | `text` | NOT NULL | CHECK `INFO`, `WARNING`, `CRITICAL` |
 | `title` | `text` | NOT NULL | CHECK non-blank |
 | `message` | `text` | NOT NULL | CHECK non-blank |
@@ -744,7 +747,7 @@ PK and UNIQUE constraints create implicit unique indexes. The following addition
 | `charity_partners` | PK; partial UNIQUE (`lower(name)`) WHERE active; `idx_charity_partners_active(is_active, name)` |
 | `donations` | PK; `idx_donations_result_date(daily_result_id, donation_date)`; `idx_donations_partner_status(charity_partner_id, status)` |
 | `waste_records` | PK; `idx_waste_result_date(daily_result_id, waste_date)` |
-| `notifications` | PK; `idx_notifications_recipient_unread(recipient_user_id, is_read, created_at DESC)` |
+| `notifications` | PK; `idx_notifications_recipient_unread(recipient_user_id, is_read, created_at DESC)`; staged UNIQUE (`recipient_user_id`, `notification_type`, `event_key`) for non-null event keys |
 | `notification_preferences` | Composite PK (`user_id`, `notification_type`) |
 | `fcm_tokens` | PK; UNIQUE (`token`); `idx_fcm_tokens_user_active(user_id, is_active)` |
 | `notification_deliveries` | PK; partial UNIQUE (`notification_id`, `fcm_token_id`, `attempt_number`) where token non-null; partial UNIQUE (`notification_id`) where token null; `idx_delivery_status(push_status, updated_at)` |
@@ -875,14 +878,14 @@ The staged `activate_model_candidate_with_audit` RPC, called by Node's `ModelMan
 - Profile role/status changes are administrator-only, preserve the final active administrator, and are audited transactionally.
 - Master records referenced by history are deactivated; ordinary CRUD cannot hard-delete them.
 
-Planned account/administration boundary (§4.8 Table 4.27):
+Account/administration boundary (§4.8 Table 4.27); staged migrations remain unverified live:
 
 | Functions/endpoints | Service and Repo | Permission/UI responsibility |
 |---|---|---|
-| `GET/PATCH /api/profile` | `ProfileService`, `UserProfileRepo` | Both roles, own profile only; ProfileView cannot submit role/status changes |
+| `GET/PATCH /api/profile/me` | `ProfileService`, `UserProfileRepo` | Both roles, own profile only; ProfileView cannot submit role/status changes |
 | `GET/POST /api/admin/users`, `PATCH /api/admin/users/:id` | `UserAdministrationService`, `UserProfileRepo`, `AuthAdminAdapter` adapter | System Administrator only; UserAdministrationView assigns exactly one role and ACTIVE/INACTIVE status; preserve final active administrator transactionally |
-| `GET/PATCH /api/admin/settings` | `SettingsService`, `BakerySettingsRepo`, `SystemSettingsRepo` | Administrator SettingsView validates non-secret settings and singleton bakery parameters |
-| `GET /api/admin/audit` | `AuditService`, `SystemLogRepo` | Administrator AuditView filters/paginates append-only history |
+| `GET /api/admin/settings`, `PATCH /api/admin/settings/bakery`, `PATCH /api/admin/settings/:key`, `GET /api/admin/service-status` | `AdministrationService`, `AdministrationRepo`, staged audited SQL RPCs | Administrator SettingsScreen validates singleton bakery and the two allowlisted prediction keys; service status exposes no credentials |
+| `GET /api/admin/audit` | `AdministrationService`, `AdministrationRepo` | Administrator AuditScreen filters/paginates read-only metadata; raw payload is omitted |
 | Catalogue/batches/recipes/partners management | `InventoryService`, `RecipeService`, `CharityPartnerService`; corresponding Repos | Administrator only; manager has permitted reads, no master-data mutation |
 | Prediction generation, production confirmation, simulation, leftover allocation/status | Respective operational Services/Repos | Bakery Manager only; administrator does not inherit these actions |
 | Reports/dashboard and own notification/preferences/token actions | `ReportService`/`ReportRepo`, `NotificationService` and notification Repos | Both roles within permitted data/recipient scope |

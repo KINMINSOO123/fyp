@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -15,8 +16,66 @@ class ApiClient {
   final http.Client _httpClient;
   final SupabaseClient _supabase;
 
-  Future<Map<String, dynamic>> getJson(String path) {
-    return _send(method: 'GET', path: path);
+  Future<Map<String, dynamic>> getJson(
+    String path, {
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    return _send(method: 'GET', path: path, timeout: timeout);
+  }
+
+  Future<ApiFile> getFile(
+    String path, {
+    required String contentType,
+    Duration timeout = const Duration(seconds: 35),
+  }) async {
+    final session = _supabase.auth.currentSession;
+    if (session == null) {
+      throw const ApiException(
+        statusCode: 401,
+        code: 'UNAUTHENTICATED',
+        message: 'Please sign in to continue.',
+      );
+    }
+    final baseUrl = AppConfig.apiBaseUrl.replaceFirst(RegExp(r'/$'), '');
+    try {
+      final response = await _httpClient
+          .get(
+            Uri.parse('$baseUrl$path'),
+            headers: {
+              'Authorization': 'Bearer ${session.accessToken}',
+              'Accept': contentType,
+            },
+          )
+          .timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _decodeResponse(response);
+        throw const FormatException('Invalid report export.');
+      }
+      if (!(response.headers['content-type'] ?? '').startsWith(contentType) ||
+          response.bodyBytes.isEmpty) {
+        throw const FormatException('Invalid report export.');
+      }
+      final disposition = response.headers['content-disposition'] ?? '';
+      final match = RegExp(
+        r'filename="([A-Za-z0-9_.-]{1,120})"',
+      ).firstMatch(disposition);
+      if (match == null) {
+        throw const FormatException('Invalid report filename.');
+      }
+      return ApiFile(bytes: response.bodyBytes, filename: match.group(1)!);
+    } on TimeoutException {
+      throw const ApiException(
+        statusCode: 503,
+        code: 'REQUEST_TIMEOUT',
+        message: 'The server took too long to respond.',
+      );
+    } on http.ClientException {
+      throw const ApiException(
+        statusCode: 503,
+        code: 'SERVER_UNAVAILABLE',
+        message: 'Unable to connect to the server.',
+      );
+    }
   }
 
   Future<Map<String, dynamic>> postJson(
@@ -36,6 +95,10 @@ class ApiClient {
 
   Future<Map<String, dynamic>> putJson(String path, Map<String, dynamic> body) {
     return _send(method: 'PUT', path: path, body: body);
+  }
+
+  Future<Map<String, dynamic>> deleteJson(String path) {
+    return _send(method: 'DELETE', path: path);
   }
 
   Future<Map<String, dynamic>> _send({
@@ -81,6 +144,10 @@ class ApiClient {
       } else if (method == 'PUT') {
         response = await _httpClient
             .put(uri, headers: headers, body: jsonEncode(body))
+            .timeout(timeout);
+      } else if (method == 'DELETE') {
+        response = await _httpClient
+            .delete(uri, headers: headers)
             .timeout(timeout);
       } else {
         throw ArgumentError('Unsupported HTTP method.');
@@ -145,4 +212,10 @@ class ApiClient {
   void close() {
     _httpClient.close();
   }
+}
+
+class ApiFile {
+  const ApiFile({required this.bytes, required this.filename});
+  final Uint8List bytes;
+  final String filename;
 }

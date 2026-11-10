@@ -80,11 +80,14 @@ These checks are to run after implementation; all are currently **PLANNED**.
 | DB-23 | Recipient A authenticates while B receives foreground notification | A sees no B row through Node or Realtime; no direct general SELECT/write privileges; mark-read only affects owned row |
 | DB-24 | Disabled/missing push preference, inactive profile/token, other user's token; valid opt-in | SKIPPED with recorded skip_reason for ineligible dispatch; submit only to intended recipient's valid active tokens; preserve per-device attempts |
 | DB-25 | Provider accepts message but no delivery callback | SUBMITTED remains distinct from DELIVERED; failure details/attempt timestamps preserved; retry adds attempt |
+| DB-25A | Same source event is published twice to recipients A and B after the event-key migration | One row per recipient/type/event key; A's read state and delivery attempts remain independent of B's; unrelated later event keys remain distinct |
 | DB-26 | Two FEFO batches at MYR 2/kg and MYR 5/kg; consume 1 kg each; change master price afterwards | Ingredient cost stays MYR 7 from immutable consumed-batch snapshots; no recosting using ingredient master |
 | DB-27 | Produced 10, sold 6, prediction 8, lost sales 3, donated 2, wasted 1 | Error -2, estimated demand 9, leftover 4, remaining 1, leftover rate 40%; donations/unallocated units not counted as waste |
 | DB-28 | Revenue below cost; revenue/production zero | Negative gross profit/margin permitted; zero-denominator percentages Not Applicable; no misleading positive floor |
 | DB-29 | UI vs weekly/category/date-filtered CSV/PDF report | Same values and simulation labels; revenue totals not added to detailed transactions again; export cannot mutate source data |
 | DB-30 | Open/refresh app with pending next-day prediction/confirmation/simulation | Derived pending indicators only; no scheduled 06:00/18:00 reminder and no automatic operation |
+| DB-31 | Administrator saves bakery settings or an allowlisted prediction key through staged settings RPC | Setting and actor/previous/current audit row commit together; invalid range/timezone/key or failed audit insertion rolls both back; manager and direct authenticated calls fail |
+| DB-32 | Administrator filters system_logs by UTC date, event, actor, outcome and page | Matching 50-row metadata pages only; no API mutation, secret payload or cross-role access |
 
 Expiry-day eligibility follows the canonical planning convention: a batch whose expiry date equals production date is usable until that date ends. Receipt-order versus expiry-order verification remains mandatory regardless of this boundary convention.
 

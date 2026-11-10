@@ -149,6 +149,34 @@ test("T-DP-GEN-03 [FR-DP-04, NFR-REL-03]: missing weather requires an explicit f
   assert.equal(saved, false);
 });
 
+test("T-DP-WEA-02 [FR-DP-04]: missing weather is cached before inference", async () => {
+  const data = repo();
+  const stored = await data.getContextData("2026-11-05");
+  let cached = false;
+  data.getContextData = async () => ({ ...stored,
+    weather: cached ? stored.weather : null });
+  const service = new PredictionOrchestrationService(data, history(), {
+    async predictCategory(input) {
+      return { breadCategoryId: input.breadCategoryId, targetDate: date,
+        predictionMode: "COLD_START" as const, predictedUnitsSold: 10,
+        modelVersionId: null, confidence: null, lowConfidence: true,
+        confidenceLabel: "Low-confidence heuristic estimate",
+        reason: "NO_ACTIVE_MODEL" as const, baseDemand: 10,
+        baseSource: "CONFIGURED_BASE" as const };
+    },
+  }, () => new Date("2026-11-04T03:00:00Z"), {
+    async cacheNextDay(actorId, targetDate, timezone) {
+      assert.equal(actorId, actor);
+      assert.equal(targetDate, date);
+      assert.equal(timezone, "Asia/Kuala_Lumpur");
+      cached = true;
+    },
+  });
+  const result = await service.generate(actor, {});
+  assert.equal(cached, true);
+  assert.equal(result.predictions[0]?.context.weatherSource, "STORED_RECORD");
+});
+
 test("T-DP-GEN-05 [FR-DP-08, NFR-REL-01]: one failed category prevents every prediction write", async () => {
   const data = repo();
   let saved = false;
