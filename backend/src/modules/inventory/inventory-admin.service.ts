@@ -1,6 +1,7 @@
 import { AppError } from "../../shared/AppError.js";
 import { isCalendarDate } from "../prediction/history-selection.service.js";
 import type { InventoryAdminRepo } from "./inventory-admin.repo.js";
+import type { RestockRepo } from "./restock.repo.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type DataRepo = Pick<InventoryAdminRepo,
@@ -43,7 +44,8 @@ function id(value: unknown): string {
 }
 
 export class InventoryAdminService {
-  constructor(private readonly providedRepo?: DataRepo) {}
+  constructor(private readonly providedRepo?: DataRepo,
+    private readonly providedRestockRepo?: Pick<RestockRepo, "receiveLinked">) {}
   private async repo(): Promise<DataRepo> {
     return this.providedRepo ?? new (await import("./inventory-admin.repo.js")).InventoryAdminRepo();
   }
@@ -117,19 +119,32 @@ export class InventoryAdminService {
   }
 
   async receiveBatch(actor: string, input: unknown) {
-    const raw = object(input, ["ingredientId", "receivedDate", "expiryDate", "quantityGrams", "unitCostSnapshot", "source"]);
+    const linked = input && typeof input === "object" && !Array.isArray(input) &&
+      "restockRequestItemId" in input;
+    const raw = object(input, linked ? ["ingredientId", "receivedDate",
+      "expiryDate", "quantityGrams", "unitCostSnapshot", "source",
+      "restockRequestItemId", "receiptKey"] : ["ingredientId",
+      "receivedDate", "expiryDate", "quantityGrams", "unitCostSnapshot",
+      "source"]);
     const receivedDate = string(raw.receivedDate, "Receipt date", 10);
     const expiryDate = string(raw.expiryDate, "Expiry date", 10);
     if (!isCalendarDate(receivedDate) || !isCalendarDate(expiryDate) || expiryDate <= receivedDate ||
         (raw.source !== null && (typeof raw.source !== "string" || !raw.source.trim()))) {
       throw new AppError(400, "VALIDATION_ERROR", "Invalid batch dates or source.");
     }
-    return (await this.repo()).mutate(actor, "RECEIVE_BATCH", {
+    const payload = {
       ingredientId: id(raw.ingredientId), receivedDate, expiryDate,
       quantityGrams: quantity(raw.quantityGrams, "Receipt quantity", false),
       unitCostSnapshot: money(raw.unitCostSnapshot, "Batch unit cost"),
       source: raw.source === null ? null : (raw.source as string).trim(),
-    });
+    };
+    if (linked) {
+      const repo = this.providedRestockRepo ?? new (await import(
+        "./restock.repo.js")).RestockRepo();
+      return repo.receiveLinked(actor, id(raw.restockRequestItemId),
+        id(raw.receiptKey), payload);
+    }
+    return (await this.repo()).mutate(actor, "RECEIVE_BATCH", payload);
   }
 
   async adjustBatch(actor: string, batchId: string, input: unknown) {

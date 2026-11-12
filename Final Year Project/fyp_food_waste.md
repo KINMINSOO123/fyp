@@ -4,7 +4,7 @@
 
 Reconciled on 2026-10-11 against the latest **RSW_SooKinMin_Project1** DOCX, especially Sections 1.1, 1.4, 3.4-3.6 and Chapter 4. The repository report mirror is [RSW_SooKinMin_Project1.docx.md](../RSW_SooKinMin_Project1.docx.md). The DOCX governs if the mirror differs. The user-deleted `FYP Report.md` remains deleted. Earlier July 2026 planning claims do not establish approval of this design.
 
-This is a proposed design. The repository contains a Flutter counter starter and planning documents; backend, ML, database, reports and test outcomes described here are not implemented or verified.
+The October 2026 reconciliation was a proposed design and the repository was then a Flutter starter. By 2026-11-11, local Flutter, Node and Python modules plus staged SQL migrations exist. This document does not claim that the new restock migration has been applied live, that device/UAT/performance outcomes have passed, or that report Chapter 5 is complete. The restock workflow is a later user-requested technical extension for separate report revision.
 
 ## 1. Objectives and scope
 
@@ -20,7 +20,7 @@ The eight functional modules in Section 1.4.2 and the seven technical build modu
 |---|---|---|
 | 1 User and Access Management | Login/logout, own profile, one stored role, active account, administrator user management | 0 data foundation; 1 Node middleware; 5 mobile views; 6 verification |
 | 2 Demand Prediction | Validated history, context, model/cold start, confidence, administrator model lifecycle | 0; 1; 2 ML prediction; 5; 6 |
-| 3 Inventory and Smart Production Recommendation | Admin master data/batches; manager jointly feasible production plan | 0; 1; 3 inventory integration; 5; 6 |
+| 3 Inventory and Smart Production Recommendation | Bakery administrator master data/batches; manager jointly feasible production plan and desired-shortage restock requests; administrator linked physical receipts | 0; 1; 3 inventory integration; 5; 6 |
 | 4 POS and Sales Simulation | Confirmed production, atomic FEFO deduction, simulated sales/history | 0; 1; 3; 4 POS simulation; 5; 6 |
 | 5 Leftover, Donation and Waste Management | Confirmed allocation, charity administration, donation status | 0; 1; 5 donation/dashboard; 6 |
 | 6 Reporting and Dashboard | Role-specific summaries and filtered on-demand CSV/PDF exports | 0; 1; 4; 5; 6 |

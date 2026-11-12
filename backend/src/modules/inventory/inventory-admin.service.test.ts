@@ -80,3 +80,28 @@ test("T-INV-AUTO-11 [FR-INV-02, FR-INV-03]: batch receipt and removal validate d
   (error) => error instanceof AppError && error.code === "VALIDATION_ERROR");
   assert.equal(calls.length, 2);
 });
+
+test("T-RST-04 [FR-INV-02, EXT-RST-04]: linked receipt delegates once to atomic receipt path", async () => {
+  const calls: unknown[] = [];
+  const instance = new InventoryAdminService({
+    async listCategories() { return []; },
+    async listIngredients() { return []; },
+    async listRecipes() { return []; },
+    async listBatches() { return { items: [], page: 1, pageSize: 50, total: 0 }; },
+    async mutate() { throw new Error("Standalone stock increment must not run."); },
+  }, { async receiveLinked(...args) {
+    calls.push(args);
+    return { id: category, restockRequestId: category,
+      alreadyRecorded: false };
+  } });
+  const receipt = { ingredientId: ingredient, receivedDate: "2026-11-11",
+    expiryDate: "2026-11-15", quantityGrams: 100,
+    unitCostSnapshot: 8.25, source: "Supplier",
+    restockRequestItemId: category, receiptKey: actor };
+  await instance.receiveBatch(actor, receipt);
+  assert.equal(calls.length, 1);
+  await assert.rejects(instance.receiveBatch(actor, { ...receipt,
+    receiptKey: "invalid" }),
+  (error) => error instanceof AppError && error.code === "VALIDATION_ERROR");
+  assert.equal(calls.length, 1);
+});

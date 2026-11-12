@@ -2,7 +2,11 @@
 -- Replace the administrator UUID before running this file. Every active
 -- category missing a cold-start base gets a provisional 10-unit demo base.
 -- Existing base quantities and other configured factors are preserved.
--- Neutral factors are deliberate starting values, not measured demand effects.
+-- Initial Kuala Lumpur demo assumptions, not scientifically validated effects.
+-- ON CONFLICT below changes base quantities only. It NEVER replaces existing
+-- weekday/weather/holiday/monsoon factors. To apply demo factors to an
+-- existing bakery, use Settings > Use demo defaults > Save, or run the separate
+-- apply_demo_prediction_factors.sql script intentionally.
 -- Missing weather/calendar data use explicitly labelled neutral fallbacks.
 
 WITH demo_bases AS (
@@ -19,17 +23,17 @@ SELECT
     jsonb_set('{
       "baseQuantities": {},
       "weekdayFactors": {
-        "SUNDAY": 1, "MONDAY": 1, "TUESDAY": 1, "WEDNESDAY": 1,
-        "THURSDAY": 1, "FRIDAY": 1, "SATURDAY": 1
+        "SUNDAY": 1.10, "MONDAY": 1, "TUESDAY": 1, "WEDNESDAY": 1,
+        "THURSDAY": 1, "FRIDAY": 1, "SATURDAY": 1.10
       },
       "monsoonMonths": [],
       "monsoonFactor": 1,
       "otherSeasonFactor": 1,
       "weatherFactors": {
-        "CLEAR": 1, "CLOUDY": 1, "RAIN": 1, "STORM": 1, "OTHER": 1
+        "CLEAR": 1, "CLOUDY": 1, "RAIN": 0.95, "STORM": 0.90, "OTHER": 1
       },
       "weatherFallbackFactor": 1,
-      "holidayFactor": 1,
+      "holidayFactor": 1.05,
       "nonHolidayFactor": 1,
       "calendarVerifiedThrough": null,
       "allowCalendarFallback": true

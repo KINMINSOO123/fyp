@@ -2,7 +2,9 @@ import { supabaseAdmin } from "../../config/supabase.js";
 import {
   isCalendarDate,
   type DailySalesObservationRow,
+  type SelectedSalesObservation,
 } from "./history-selection.service.js";
+import { attachSavedHistoryContexts } from "./saved-history-context.js";
 
 const pageSize = 500;
 
@@ -18,6 +20,28 @@ interface DailySalesDbRow {
 }
 
 export class DailySalesRecordRepo {
+  async withSavedContexts(observations: SelectedSalesObservation[]):
+    Promise<SelectedSalesObservation[]> {
+    const ids = [...new Set(observations.flatMap((row) =>
+      row.sourceDailyResultId ? [row.sourceDailyResultId] : []))];
+    if (!ids.length) return observations.map((row) => ({ ...row,
+      contextFactors: null }));
+    const results = await supabaseAdmin.from("daily_results")
+      .select("id,result_date,bread_category_id,prediction_id").in("id", ids);
+    if (results.error || !results.data) throw new Error(
+      "Unable to load historical daily results.");
+    const predictionIds = [...new Set(results.data.map((row) => row.prediction_id))];
+    if (!predictionIds.length) {
+      return attachSavedHistoryContexts(observations, results.data, []);
+    }
+    const predictions = await supabaseAdmin.from("daily_predictions")
+      .select("id,target_date,bread_category_id,context_snapshot")
+      .in("id", predictionIds);
+    if (predictions.error || !predictions.data) throw new Error(
+      "Unable to load historical prediction context.");
+    return attachSavedHistoryContexts(observations, results.data,
+      predictions.data);
+  }
   // Node is the only database reader. FastAPI receives the selected DTO later.
   async listBeforeDate(
     breadCategoryId: string,

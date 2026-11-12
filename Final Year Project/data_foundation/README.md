@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled **11 October 2026** against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Section 4.5 and Tables 4.14-4.20. This README contains **proposed SQL and DTO examples**, not implemented files, migration output or verified behaviour. See [MODULE.md](MODULE.md), [canonical field dictionary/ERD](../../database_canonical_design.md) and [planned checks](../../database_schema_verification.md). The DOCX controls; historical July planning labels do not.
+Reconciled **11 October 2026** against the latest `RSW_SooKinMin_Project1 (1).docx`, especially Section 4.5 and Tables 4.14-4.20. The 2026-11-11 restock extension is a later user requirement and needs a separate report revision. SQL/DTO fences here remain design examples; executable restock SQL is [the staged migration](../../supabase/migrations/20261111000100_restock_requests.sql), not verified live. See [MODULE.md](MODULE.md), [canonical field dictionary/ERD](../../database_canonical_design.md) and [planned checks](../../database_schema_verification.md).
 
 ## 1. Build dependencies and scope
 
@@ -15,13 +15,13 @@ Plan schema/contracts first, then Node Controllers/Services/Repos, ML DTOs/servi
 | Group | Tables | Count |
 |---|---|---:|
 | Access/configuration | user_profiles, bakery_settings, system_settings | 3 |
-| Catalogue/inventory | bread_categories, ingredients, recipes, inventory, inventory_batches, inventory_log | 6 |
-| Context/prediction/models | weather_records, calendar_events, daily_sales_records, ml_model_versions, model_evaluations, feature_importance, daily_predictions, prediction_calendar_events | 8 |
+| Catalogue/inventory/restock | bread_categories, ingredients, recipes, inventory, inventory_batches, inventory_log, restock_requests, restock_request_items | 8 |
+| Context/prediction/models | weather_records, calendar_events, kl_holiday_syncs, daily_sales_records, ml_model_versions, model_evaluations, feature_importance, daily_predictions, prediction_calendar_events | 9 |
 | Production/POS/surplus | production_decisions, daily_production, daily_results, sales_transactions, charity_partners, donations, waste_records | 7 |
 | Notifications/audit | notifications, notification_preferences, fcm_tokens, notification_deliveries, system_logs | 5 |
-| **Total public tables** | | **29** |
+| **Total staged public tables** | | **32** |
 
-One external `auth.users` table and one computed `sales_by_timeslot` view are additional objects, not extra application tables. There are **0 PostgreSQL enum types** and **21 CHECK-controlled domains**, listed in canonical Section 3. Do not revive the historical "19 tables" count. Schema keys, constraints and all field details live in canonical Section 5; no smaller README list overrides it.
+The report-derived baseline had 29 tables; two restock and one KL holiday coverage tables are later staged extensions. One external `auth.users` table and one computed `sales_by_timeslot` view are additional objects, not extra application tables. The staged schema has **0 PostgreSQL enum types** and **24 CHECK-controlled domains**, listed in canonical Section 3. The KL holiday migration has not been applied live. Do not revive the historical "19 tables" count. Schema keys, constraints and field details live in canonical Section 5.
 
 Use database snake_case, TypeScript/Dart camelCase and explicit Pydantic transport mappings. Controlled values remain uppercase. Preserve `recipient_user_id`, `source_daily_result_id`, `external_source_reference`, `prediction_calendar_events` and `sales_prediction_error` spellings. Do not introduce SimulationRun/LeftoverRecord tables. Recommendation and report objects are DTOs; leftover persists on DailyResult, allocations in normalized child tables.
 
@@ -106,7 +106,7 @@ type PredictionDTO = PredictionBase & (
 );
 ```
 
-These are selected shared examples, not an assertion that the full type catalogue has seven aliases. The complete 21 controlled domains are in canonical Section 3. Runtime Zod/Pydantic/Dart validation must preserve this discriminated nullability. Validate finite values, whole quantities, UUID/date formatting and 0..100 numerical model confidence. Do not coerce null to zero or render a cold-start percentage.
+These are selected shared examples, not an assertion that the full type catalogue has seven aliases. The complete staged 24 controlled domains, including restock status, KL holiday provider and state, are in canonical Section 3. Runtime Zod/Pydantic/Dart validation must preserve this discriminated nullability. Validate finite values, whole quantities, UUID/date formatting and 0..100 numerical model confidence. Do not coerce null to zero or render a cold-start percentage.
 
 ```json
 {

@@ -83,8 +83,9 @@ export class AdministrationService {
       weatherAdapter: process.env.OPENWEATHER_API_KEY &&
         process.env.BAKERY_LATITUDE && process.env.BAKERY_LONGITUDE ?
         "CONFIGURED_UNVERIFIED" : "NOT_CONFIGURED",
-      calendarAdapter: "MANUAL_VERIFIED_ENTRIES",
-      note: "Configuration does not prove weather reachability, calendar completeness, push delivery or prediction accuracy." };
+      calendarAdapter: process.env.BAKERY_HOLIDAY_STATE ?
+        "MALAYSIA_HOLIDAY_API_CONFIGURED_UNVERIFIED" : "MANUAL_VERIFIED_ENTRIES",
+      note: "Configuration does not prove weather reachability, holiday API availability or completeness, push delivery or prediction accuracy." };
   }
 
   async saveBakery(actorUserId: string, raw: unknown) {

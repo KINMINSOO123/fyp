@@ -226,7 +226,7 @@ classDiagram
 
 Unique foreign keys enforce prediction -> decision -> production -> result. Zero-or-one represents prerequisites not yet processed; a committed official simulation creates its production, result and validated simulation history together. `DailySalesRecord` source references are origin-specific; imported history has no invented simulation FK. Model references are mandatory for MODEL and absent for COLD_START. A notification delivery's optional token belongs to the same intended recipient.
 
-The [database catalogue](database_canonical_design.md) contains 29 public tables, one managed `auth.users` dependency and one computed `sales_by_timeslot` view. The catalogue uses controlled text CHECK domains rather than PostgreSQL ENUM types. DB snake_case maps to DTO camelCase (`prediction_mode` -> `predictionMode`, `bread_category_id` -> `breadCategoryId`, `predicted_units_sold` -> `predictedUnitsSold`, `units_sold` -> `unitsSold`, `model_version_id` -> `modelVersionId`, `recipient_user_id` -> `recipientUserId`). Quantity and cost units must be explicit. InventoryLog consumption retains batch links/cost traceability; donation/waste rows obtain category from DailyResult.
+The [database catalogue](database_canonical_design.md) contains 31 staged public tables (29 report-derived plus two restock-extension tables), one managed `auth.users` dependency and one computed `sales_by_timeslot` view. The catalogue uses controlled text CHECK domains rather than PostgreSQL ENUM types. DB snake_case maps to DTO camelCase (`prediction_mode` -> `predictionMode`, `bread_category_id` -> `breadCategoryId`, `predicted_units_sold` -> `predictedUnitsSold`, `units_sold` -> `unitsSold`, `model_version_id` -> `modelVersionId`, `recipient_user_id` -> `recipientUserId`). Quantity and cost units must be explicit. InventoryLog consumption retains batch links/cost traceability; donation/waste rows obtain category from DailyResult.
 
 ## 5. Invariants at service boundaries
 
@@ -242,3 +242,34 @@ The [database catalogue](database_canonical_design.md) contains 29 public tables
 ## 6. Review and implementation order
 
 Follow build modules 0-6 in [the project plan](Final%20Year%20Project/fyp_food_waste.md). Verify shared DTO/storage constraints before UI work, then authorization/administration, ML lifecycle, joint planning, atomic simulation, allocation/reporting and notification integration. [Traceability](planning_documents_change_report.md#requirements-traceability-matrix) maps every BR/FR/NFR to implementation boundaries and planned checks. No implementation or performance claims arise from these diagrams.
+
+## 7. Restock extension logical view - 2026-11-11
+
+This user-requested extension is implemented locally and staged in SQL; it is absent from the current report diagrams. The bakery `SYSTEM_ADMINISTRATOR` owns stock receipt. The `BAKERY_MANAGER` owns restock requests. Route modules register endpoints but are not UML classes.
+
+```mermaid
+classDiagram
+  class ProductionPlanningView
+  class RestockAdminView
+  class RestockController
+  class RestockService
+  class RestockRepo
+  class InventoryAdminController
+  class InventoryAdminService
+  class InventoryAdminRepo
+  class RestockRequest
+  class RestockRequestItem
+  class InventoryBatch
+  ProductionPlanningView --> RestockController : manager preview/request
+  RestockAdminView --> RestockController : admin review/cancel
+  RestockAdminView --> InventoryAdminController : linked batch receipt
+  RestockController --> RestockService
+  RestockService --> RestockRepo
+  InventoryAdminController --> InventoryAdminService
+  InventoryAdminService --> RestockRepo : linked receipt RPC
+  InventoryAdminService --> InventoryAdminRepo : ordinary receipt
+  RestockRequest "1" --> "1..*" RestockRequestItem
+  RestockRequestItem "0..1" --> "0..*" InventoryBatch : linked receipts
+```
+
+The manager preview uses stored predictions/decisions and valid batch remainders to show unmet desired production, separately from feasible reduced recommendations. SQL rechecks the snapshot under inventory and production-date locks before request insertion. A linked physical receipt calls the existing audited batch receipt once; request status and cancellation never themselves change stock. `receivedGrams` is derived from linked batch initial quantities; pending grams are excluded from available inventory.

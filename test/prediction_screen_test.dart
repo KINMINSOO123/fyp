@@ -9,9 +9,17 @@ class FakePredictionGateway implements PredictionGateway {
   FakePredictionGateway(this.state);
   NextPredictionState state;
   int generationCount = 0;
+  final requestedDates = <String>[];
+  final savedByDate = <String, List<DailyPrediction>>{};
 
   @override
   Future<NextPredictionState> getNextDayState() async => state;
+
+  @override
+  Future<List<DailyPrediction>> getByDate(String date) async {
+    requestedDates.add(date);
+    return savedByDate[date] ?? [];
+  }
 
   @override
   Future<void> generateNextDay() async {
@@ -76,6 +84,71 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(
+      find.text('No prediction has been saved for this date.'),
+      findsOneWidget,
+    );
+    expect(find.text('Generate Prediction'), findsNothing);
+    expect(gateway.generationCount, 0);
+  });
+
+  testWidgets('selected past date reads saved predictions without generating', (
+    tester,
+  ) async {
+    final gateway = FakePredictionGateway(
+      const NextPredictionState(targetDate: '2026-11-05', predictions: []),
+    );
+    gateway.savedByDate['2026-11-04'] = [
+      DailyPrediction.fromJson({
+        'id': 'older-prediction',
+        'targetDate': '2026-11-04',
+        'breadCategoryId': 'category-1',
+        'breadCategoryName': 'Wholemeal Bread',
+        'predictedUnitsSold': 9,
+        'predictionMode': 'COLD_START',
+        'confidence': null,
+        'modelVersionId': null,
+        'contextSnapshot': null,
+      }),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PredictionScreen(role: UserRole.bakeryManager, gateway: gateway),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(gateway.requestedDates, ['2026-11-04']);
+    expect(find.text('2026-11-04'), findsOneWidget);
+    expect(find.text('9 units'), findsOneWidget);
+    expect(find.text('Generate Prediction'), findsNothing);
+    expect(gateway.generationCount, 0);
+  });
+
+  testWidgets('past date without predictions shows empty state only', (
+    tester,
+  ) async {
+    final gateway = FakePredictionGateway(
+      const NextPredictionState(targetDate: '2026-11-05', predictions: []),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PredictionScreen(role: UserRole.bakeryManager, gateway: gateway),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(gateway.requestedDates, ['2026-11-04']);
     expect(
       find.text('No prediction has been saved for this date.'),
       findsOneWidget,

@@ -23,7 +23,7 @@ class MainActivity : FlutterActivity() {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
                 filename == null || !filename.matches(Regex("[A-Za-z0-9_.-]{1,120}")) ||
                 mimeType !in setOf("application/pdf", "text/csv") ||
-                bytes == null || bytes.isEmpty) {
+                bytes == null || bytes.isEmpty()) {
                 result.error("INVALID_EXPORT", "Invalid Android report export.", null)
                 return@setMethodCallHandler
             }

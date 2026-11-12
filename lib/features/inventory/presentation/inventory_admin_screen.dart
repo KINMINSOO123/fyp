@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/inventory_admin_service.dart';
+import 'dialog_controller_scope.dart';
+import 'restock_admin_screen.dart';
 
 class InventoryAdminScreen extends StatefulWidget {
   const InventoryAdminScreen({this.gateway, super.key});
@@ -352,107 +354,107 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
     final source = TextEditingController();
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, refresh) => AlertDialog(
-          title: const Text('Receive ingredient batch'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: ingredientId,
-                  items: _ingredients
-                      .where((item) => item['isActive'] == true)
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item['id'] as String,
-                          child: Text(item['name'] as String),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => refresh(() => ingredientId = value),
-                  decoration: const InputDecoration(labelText: 'Ingredient'),
-                ),
-                TextField(
-                  controller: received,
-                  decoration: const InputDecoration(
-                    labelText: 'Received date (YYYY-MM-DD)',
+      builder: (dialogContext) => DialogControllerScope(
+        controllers: [received, expiry, quantity, unitCost, source],
+        child: StatefulBuilder(
+          builder: (context, refresh) => AlertDialog(
+            title: const Text('Receive ingredient batch'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: ingredientId,
+                    items: _ingredients
+                        .where((item) => item['isActive'] == true)
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item['id'] as String,
+                            child: Text(item['name'] as String),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => refresh(() => ingredientId = value),
+                    decoration: const InputDecoration(labelText: 'Ingredient'),
                   ),
-                ),
-                TextField(
-                  controller: expiry,
-                  decoration: const InputDecoration(
-                    labelText: 'Expiry date (YYYY-MM-DD)',
-                  ),
-                ),
-                TextField(
-                  controller: quantity,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(labelText: 'Quantity (g)'),
-                ),
-                TextField(
-                  controller: unitCost,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Batch cost (MYR/kg)',
-                  ),
-                ),
-                TextField(
-                  controller: source,
-                  decoration: const InputDecoration(
-                    labelText: 'Supplier/source (optional)',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final grams = double.tryParse(quantity.text);
-                final cost = double.tryParse(unitCost.text);
-                if (grams == null ||
-                    cost == null ||
-                    expiry.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Enter valid receipt fields.'),
+                  TextField(
+                    controller: received,
+                    decoration: const InputDecoration(
+                      labelText: 'Received date (YYYY-MM-DD)',
                     ),
-                  );
-                  return;
-                }
-                _save(
-                  () => _gateway.receiveBatch({
-                    'ingredientId': ingredientId,
-                    'receivedDate': received.text.trim(),
-                    'expiryDate': expiry.text.trim(),
-                    'quantityGrams': grams,
-                    'unitCostSnapshot': cost,
-                    'source': source.text.trim().isEmpty
-                        ? null
-                        : source.text.trim(),
-                  }),
-                );
-              },
-              child: const Text('Receive'),
+                  ),
+                  TextField(
+                    controller: expiry,
+                    decoration: const InputDecoration(
+                      labelText: 'Expiry date (YYYY-MM-DD)',
+                    ),
+                  ),
+                  TextField(
+                    controller: quantity,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Quantity (g)',
+                    ),
+                  ),
+                  TextField(
+                    controller: unitCost,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Batch cost (MYR/kg)',
+                    ),
+                  ),
+                  TextField(
+                    controller: source,
+                    decoration: const InputDecoration(
+                      labelText: 'Supplier/source (optional)',
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final grams = double.tryParse(quantity.text);
+                  final cost = double.tryParse(unitCost.text);
+                  if (grams == null ||
+                      cost == null ||
+                      expiry.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Enter valid receipt fields.'),
+                      ),
+                    );
+                    return;
+                  }
+                  _save(
+                    () => _gateway.receiveBatch({
+                      'ingredientId': ingredientId,
+                      'receivedDate': received.text.trim(),
+                      'expiryDate': expiry.text.trim(),
+                      'quantityGrams': grams,
+                      'unitCostSnapshot': cost,
+                      'source': source.text.trim().isEmpty
+                          ? null
+                          : source.text.trim(),
+                    }),
+                  );
+                },
+                child: const Text('Receive'),
+              ),
+            ],
+          ),
         ),
       ),
     );
-    received.dispose();
-    expiry.dispose();
-    quantity.dispose();
-    unitCost.dispose();
-    source.dispose();
   }
 
   Future<void> _removeDialog(Map<String, dynamic> batch) async {
@@ -542,6 +544,15 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const RestockAdminScreen(),
+              ),
+            ),
+            icon: const Icon(Icons.local_shipping_outlined),
+            tooltip: 'Restock requests',
+          ),
           IconButton(
             onPressed: _scanAlerts,
             icon: const Icon(Icons.notification_add_outlined),

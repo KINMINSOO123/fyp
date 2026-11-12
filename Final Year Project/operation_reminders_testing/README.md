@@ -76,6 +76,21 @@ Origin labels remain visible in performance reports. Simulation-based results do
 
 ## 6. Shared inventory, FEFO and production decision checks
 
+### Restock extension checks (2026-11-11 user request)
+
+The restock checks below map to local `EXT-RST-01`–`EXT-RST-06` IDs in [Module 3](../inventory_integration/README.md#restock-request-extension---2026-11-11). They are not existing report requirement IDs. Current local tests cover pure joint shortages, stale/unconfirmed submission rejection, role routes, linked receipt delegation and read-model partial fulfilment. The transactional cases remain **pending isolated PostgreSQL execution** after the staged migration; do not present them as completed Chapter 5 results.
+
+| Test ID | Scenario and expected result | Mapping |
+|---|---|---|
+| T-RST-01/02 | Shared flour/butter shortages appear even with feasible reduced recommendations; confirmed selected quantities replace predictions; processed production excluded; a new valid batch removes the shortfall on refresh | EXT-RST-01 |
+| T-RST-03 | Manager explicitly confirms current preview; changed desired quantities or stock reject stale submission; no shortage creates no request | EXT-RST-02 |
+| T-RST-04/05 | Manager cannot receive/cancel, administrator cannot request; linked receipt uses the one existing audited batch path | EXT-RST-04/06 |
+| T-RST-06 | Requested, received, cancelled and outstanding grams remain distinct for partial/full/cancelled states | EXT-RST-04/05 |
+| DB-RST-02/04/05/06 | In an isolated database, concurrently submit duplicate date requests; retry same receipt key; receive partial/full/excess; cancel outstanding. Verify exactly one batch, inventory increment and RESTOCK movement per physical receipt and atomic rollback on failure | EXT-RST-02/04/05 |
+| DB-RST-07 | After receipt, manager refreshes plan; pending grams never count as stock; confirmation and POS still enforce current valid stock | EXT-RST-01/04 |
+
+No supplier ordering/payment tests are added. Preserve FEFO expiry/receipt/id ordering and existing model evaluation tests.
+
 | Test | Fixture/action and expected outcome | Traceability |
 |---|---|---|
 | INV-01 | Two categories share 1,000 g flour and each uses 10 g/unit; each predicts 80. With no commitments and A before B, recommend A=80 then B=20, not 80 each | BR-INV-01/02; FR-INV-07/08; §4.9.3 |

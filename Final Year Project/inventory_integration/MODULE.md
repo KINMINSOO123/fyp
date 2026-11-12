@@ -2,13 +2,13 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. That is the historical design audit. As of 2026-11-04, shared-balance recommendations, manager confirmation/revision and administrator inventory endpoints/screens have automated tests. The production-decision and inventory-administration RPCs are staged but have not been applied or verified live. FEFO production deduction and POS integration remain planned. See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [schema](../../database_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
+Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. That is the historical design audit. **Current local implementation (2026-11-11):** shared-balance recommendations, manager confirmation/revision, administrator inventory, and the user-requested restock workflow have Node/Flutter code and focused local tests. The restock migration is staged and unverified live. See the [detailed plan](README.md), [architecture](../ARCHITECTURE.md), [schema](../../database_canonical_design.md) and [traceability](../../planning_documents_change_report.md).
 
 ## 1. Scope, mapping and permissions
 
 Technical Module 3 delivers **Inventory and Smart Production Recommendation** and contributes to **Reporting and Dashboard**, **Alerts and Notifications** and **System Administration**. The report's eight functional modules coexist with build modules 0–6.
 
-System Administrators manage ingredients, batches, categories and recipes. Bakery Managers review recommendations and confirm/revise production. Administrators do not inherit manager actions. Both roles can view permitted reports; validate JWT and an ACTIVE stored profile before role checks. Roles and actor IDs come from Node, not request fields.
+System Administrators are the bakery's business administrators: they manage ingredients, batches, categories and recipes, review restock requests, receive physical stock and cancel outstanding requests with a reason. Bakery Managers review recommendations, confirm/revise production and request restocking. Administrators do not inherit manager actions. Both roles can view permitted reports; validate JWT and an ACTIVE stored profile before role checks. Roles and actor IDs come from Node, not request fields.
 
 Operations cover configured active categories, including up to 20 in the reference workload. Four bread categories/five ingredients are example seeds. This module consumes stored predictions; prediction generation, cost-based production optimization, automatic buffers and background scheduling are outside its responsibilities.
 
@@ -22,6 +22,7 @@ Module 0 supplies normalized recipes, batches/cost snapshots, movements, decisio
 | `RecommendationController`, `ProductionDecisionController` | Manager recommendation and confirmation workflow |
 | `InventoryAdminService`, `InventoryAdminRepo` | Implemented validation/reads and staged atomic audited catalogue/stock RPC; further stock views remain planned |
 | `RecommendationEngine` | Reserve outstanding commitments and allocate shared balances in display order |
+| `RestockController`, `RestockService`, `RestockRepo`, `buildRestockPreview` | Manager desired-quantity shortage preview/request; administrator review/cancellation; locked SQL submission and linked receipt |
 | `ProductionDecisionService` | Validate combined requirements and replace revised quantities atomically; no deduction |
 | `FefoBatchService` | Valid expiry-ordered batch movements inside the POS transaction |
 | `IngredientCostService` | Reporting-only actual FEFO movement costs using immutable batch snapshots |
@@ -39,6 +40,8 @@ Process unconfirmed categories in ascending `display_order`. For each category, 
 On confirmation/revision, validate all outstanding decisions using the proposed quantity. Replace the previous quantity rather than counting both versions. Require a reason when changing the recommendation and recalculate affected recommendations. A feasible manager override above prediction is permitted with a reason; the system adds no automatic buffer. Options are `ACCEPT_RECOMMENDATION`, `REDUCE`, `MANUAL_OVERRIDE`.
 
 Planning/confirmation changes no inventory or movement rows. A decision with committed `daily_production` is processed and excluded from outstanding commitments. POS revalidates current stock.
+
+For a restock preview, total the ingredient needs of every unprocessed category together. Use `final_selected_qty` for a confirmed decision and `predicted_units_sold` otherwise. Compare this desired total with batches valid on the production date; report the positive difference even if the reduced production recommendation is feasible. Request submission rechecks the plan under the inventory and production-date locks, stores the manager/date/category snapshot and ingredient shortfalls, and does not alter inventory or confirmed decisions. Only a physically received batch changes inventory. Pending requested grams never count as stock. See the detailed [restock contract](README.md#restock-request-extension---2026-11-11).
 
 ## 4. FEFO and cost
 

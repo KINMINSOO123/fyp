@@ -10,6 +10,8 @@ import predictionRouter from "./modules/prediction/prediction.routes.js";
 import calendarRouter from "./modules/prediction/calendar.routes.js";
 import recommendationRouter from "./modules/inventory/recommendation.routes.js";
 import inventoryAdminRouter from "./modules/inventory/inventory-admin.routes.js";
+import { managerRestockRouter, adminRestockRouter } from
+  "./modules/inventory/restock.routes.js";
 import posSimulationRouter from "./modules/pos-simulation/pos-simulation.routes.js";
 import { leftoverRouter, donationRouter, wasteRouter,
   charityAdminRouter } from "./modules/leftovers/leftover.routes.js";
@@ -42,6 +44,10 @@ app.use("/api/admin/models", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), 
 app.use("/api/admin/calendar-events", authenticate,
   requireRole("SYSTEM_ADMINISTRATOR"), calendarRouter);
 app.use("/api/admin/inventory", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), inventoryAdminRouter);
+app.use("/api/admin/restock-requests", authenticate,
+  requireRole("SYSTEM_ADMINISTRATOR"), adminRestockRouter);
+app.use("/api/restock-requests", authenticate,
+  requireRole("BAKERY_MANAGER"), managerRestockRouter);
 app.use("/api/predictions", authenticate, predictionRouter);
 app.use("/api/simulations", authenticate, posSimulationRouter);
 app.use("/api/leftovers", authenticate, leftoverRouter);

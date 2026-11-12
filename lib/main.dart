@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/config/app_config.dart';
 import 'features/auth/presentation/auth_gate.dart';
+import 'core/theme/bakery_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,10 +39,7 @@ class SmartBakeryApp extends StatelessWidget {
     return MaterialApp(
       title: 'Smart Bakery',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF8B5E3C)),
-        useMaterial3: true,
-      ),
+      theme: BakeryTheme.light,
       home: home ?? const AuthGate(),
     );
   }

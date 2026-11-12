@@ -24,6 +24,8 @@ export interface SelectedSalesObservation {
   dataOrigin: DataOrigin;
   sourceDailyResultId: string | null;
   externalSourceReference: string | null;
+  contextFactors?: { weekdayFactor: number; monsoonFactor: number;
+    weatherFactor: number; holidayFactor: number } | null;
 }
 
 export interface RejectedSalesObservation {

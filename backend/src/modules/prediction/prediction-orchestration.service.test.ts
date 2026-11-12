@@ -11,6 +11,9 @@ const second = "00000000-0000-4000-8000-000000000002";
 const activeId = "00000000-0000-4000-8000-000000000003";
 const actor = "00000000-0000-4000-8000-000000000004";
 const date = "2026-11-05";
+const coveredHoliday = { async ensure() { return { date, stateCode: "KUL",
+  isHoliday: true, sourceUrl: "https://example.org/holidays",
+  holidays: [] }; } };
 const rules = {
   baseQuantities: { [second]: 10 },
   weekdayFactors: { SUNDAY: 1, MONDAY: 1, TUESDAY: 1,
@@ -104,13 +107,14 @@ test("T-DP-GEN-01 [FR-DP-05, FR-DP-07, FR-DP-08, NFR-ACC-08]: saves model and co
     },
   };
   const service = new PredictionOrchestrationService(data, history(), ml,
-    () => new Date("2026-11-04T03:00:00Z"));
+    () => new Date("2026-11-04T03:00:00Z"), undefined, coveredHoliday);
   const result = await service.generate(actor, {});
   assert.equal(result.predictions.length, 2);
   assert.equal(saved[0]?.result.predictionMode, "MODEL");
   assert.equal(saved[1]?.result.confidence, null);
   assert.equal(saved[0]?.contextSnapshot.weatherSource, "STORED_RECORD");
-  assert.equal(saved[0]?.contextSnapshot.calendarSource, "STORED_EVENTS");
+  assert.equal(saved[0]?.contextSnapshot.calendarSource,
+    "MALAYSIA_HOLIDAY_API");
 });
 
 test("T-DP-GEN-02 [FR-DP-05, NFR-REL-01]: duplicate and invalid requests stop before inference", async () => {
@@ -119,7 +123,7 @@ test("T-DP-GEN-02 [FR-DP-05, NFR-REL-01]: duplicate and invalid requests stop be
   data.hasPredictionForDate = async () => true;
   const service = new PredictionOrchestrationService(data, history(), {
     async predictCategory() { mlCalls += 1; throw new Error("Must not run."); },
-  }, () => new Date("2026-11-04T03:00:00Z"));
+  }, () => new Date("2026-11-04T03:00:00Z"), undefined, coveredHoliday);
   await assert.rejects(service.generate(actor, {}),
     (error: unknown) => error instanceof AppError &&
       error.code === "PREDICTION_ALREADY_EXISTS");
@@ -142,7 +146,7 @@ test("T-DP-GEN-03 [FR-DP-04, NFR-REL-03]: missing weather requires an explicit f
   data.saveBatch = async () => { saved = true; return []; };
   const service = new PredictionOrchestrationService(data, history(), {
     async predictCategory() { throw new Error("Must not run."); },
-  }, () => new Date("2026-11-04T03:00:00Z"));
+  }, () => new Date("2026-11-04T03:00:00Z"), undefined, coveredHoliday);
   await assert.rejects(service.generate(actor, {}),
     (error: unknown) => error instanceof AppError &&
       error.code === "WEATHER_CONTEXT_UNAVAILABLE");
@@ -171,10 +175,48 @@ test("T-DP-WEA-02 [FR-DP-04]: missing weather is cached before inference", async
       assert.equal(timezone, "Asia/Kuala_Lumpur");
       cached = true;
     },
-  });
+  }, coveredHoliday);
   const result = await service.generate(actor, {});
   assert.equal(cached, true);
   assert.equal(result.predictions[0]?.context.weatherSource, "STORED_RECORD");
+});
+
+test("T-DP-HOL-05 [FR-DP-04]: next-day prediction records KUL API provenance", async () => {
+  const data = repo();
+  const original = await data.getContextData(date);
+  data.getContextData = async () => ({ ...original,
+    rules: { ...rules, allowCalendarFallback: false }, calendarEvents: [] });
+  let saved: PredictionToSave[] = [];
+  data.saveBatch = async (_actor, _date, items) => {
+    saved = items;
+    return items.map((item) => ({ id: first,
+      breadCategoryId: item.breadCategoryId }));
+  };
+  const service = new PredictionOrchestrationService(data, history(), {
+    async predictCategory(input) { return { breadCategoryId: input.breadCategoryId,
+      targetDate: date, predictionMode: "COLD_START" as const,
+      predictedUnitsSold: 10, modelVersionId: null, confidence: null,
+      lowConfidence: true, confidenceLabel: "Low-confidence heuristic estimate",
+      reason: "NO_ACTIVE_MODEL" as const, baseDemand: 10,
+      baseSource: "CONFIGURED_BASE" as const }; },
+  }, () => new Date("2026-11-04T03:00:00Z"), undefined, {
+    async ensure(actorId, targetDate) {
+      assert.equal(actorId, actor);
+      assert.equal(targetDate, date);
+      return { date, stateCode: "KUL", isHoliday: true,
+        sourceUrl: "https://malaysia-holiday.dydxsoft.my/api/v1/holidays",
+        holidays: [{ name: "Test holiday",
+          sourceUrl: "https://www.kabinet.gov.my/source.pdf",
+          subjectToChange: false }] };
+    },
+  });
+  await service.generate(actor, {});
+  assert.equal(saved[0]?.contextSnapshot.calendarSource,
+    "MALAYSIA_HOLIDAY_API");
+  assert.equal((saved[0]?.contextSnapshot.factors as { holidayFactor: number })
+    .holidayFactor, 1.3);
+  assert.equal((saved[0]?.contextSnapshot.holidayApi as { stateCode: string })
+    .stateCode, "KUL");
 });
 
 test("T-DP-GEN-05 [FR-DP-08, NFR-REL-01]: one failed category prevents every prediction write", async () => {
@@ -192,7 +234,7 @@ test("T-DP-GEN-05 [FR-DP-08, NFR-REL-01]: one failed category prevents every pre
         lowConfidence: false, confidenceLabel: "Model agreement",
         reason: "MODEL_READY" as const };
     },
-  }, () => new Date("2026-11-04T03:00:00Z"));
+  }, () => new Date("2026-11-04T03:00:00Z"), undefined, coveredHoliday);
   await assert.rejects(service.generate(actor, {}),
     (error: unknown) => error instanceof AppError &&
       error.code === "ML_UNAVAILABLE");
@@ -211,7 +253,7 @@ test("T-DP-GEN-06 [FR-DP-07]: absent history needs that category's configured ba
   });
   const service = new PredictionOrchestrationService(data, history(), {
     async predictCategory() { throw new Error("Must not run."); },
-  }, () => new Date("2026-11-04T03:00:00Z"));
+  }, () => new Date("2026-11-04T03:00:00Z"), undefined, coveredHoliday);
   await assert.rejects(service.generate(actor, {}),
     (error: unknown) => error instanceof AppError &&
       error.code === "PREDICTION_CONFIG_INCOMPLETE");

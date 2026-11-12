@@ -6,6 +6,8 @@ import { parsePredictionRules, resolvePredictionContext } from "./prediction-con
 import type { PredictionHistoryService } from "./prediction-history.service.js";
 import type { PredictionRepo } from "./prediction.repo.js";
 import type { WeatherService } from "./weather.service.js";
+import type { MalaysiaHolidayCheck } from "./malaysia-holiday.client.js";
+import type { KlHolidayService } from "./kl-holiday.service.js";
 
 type DataRepo = Pick<PredictionRepo,
   "getBakeryTimezone" | "listActiveCategories" | "listActiveModels" |
@@ -37,6 +39,7 @@ export class PredictionOrchestrationService {
     private readonly providedMl?: MlAdapter,
     private readonly now: () => Date = () => new Date(),
     private readonly providedWeather?: Pick<WeatherService, "cacheNextDay">,
+    private readonly providedHoliday?: Pick<KlHolidayService, "ensure">,
   ) {}
 
   private async repo(): Promise<DataRepo> {
@@ -106,8 +109,21 @@ export class PredictionOrchestrationService {
         "The model confidence threshold is not configured.");
     }
     const rules = parsePredictionRules(context.rules);
+    let apiHoliday: MalaysiaHolidayCheck | null = null;
+    const stateCode = process.env.BAKERY_HOLIDAY_STATE?.trim().toUpperCase();
+    if (stateCode && stateCode !== "KUL") throw new AppError(409,
+      "HOLIDAY_STATE_INVALID", "Configure BAKERY_HOLIDAY_STATE=KUL.");
+    const holiday = this.providedHoliday ?? new (
+      await import("./kl-holiday.service.js")).KlHolidayService();
+    apiHoliday = await holiday.ensure(actorUserId, targetDate);
+    if (apiHoliday) context = await repo.getContextData(targetDate);
+    if (!apiHoliday && context.calendarEvents.length > 0) {
+      throw new AppError(503, "CALENDAR_CONTEXT_UNAVAILABLE",
+        "KL holiday coverage needs refreshing; retry after the provider is available.");
+    }
     const resolved = resolvePredictionContext(
-      targetDate, rules, context.weather, context.calendarEvents,
+      targetDate, { ...rules, calendarVerifiedThrough: null },
+      context.weather, context.calendarEvents, apiHoliday,
     );
     const modelsByCategory = new Map(activeModels.map((model) =>
       [model.breadCategoryId, model]));
@@ -156,6 +172,7 @@ export class PredictionOrchestrationService {
           weatherSource: resolved.weatherSource,
           weatherCondition: context.weather?.condition ?? null,
           calendarSource: resolved.calendarSource,
+          ...(apiHoliday ? { holidayApi: apiHoliday } : {}),
           calendarEventIds: resolved.calendarEventIds,
           selectedHistoryDayCount: history.distinctDayCount,
           reason: result.reason,

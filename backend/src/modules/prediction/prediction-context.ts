@@ -1,6 +1,7 @@
 import { AppError } from "../../shared/AppError.js";
 import { isCalendarDate } from "./history-selection.service.js";
 import type { ColdStartFactorsDto } from "./prediction-category.dto.js";
+import type { MalaysiaHolidayCheck } from "./malaysia-holiday.client.js";
 
 export type WeatherCondition = "CLEAR" | "CLOUDY" | "RAIN" | "STORM" | "OTHER";
 export type CalendarEventType =
@@ -74,12 +75,14 @@ export function resolvePredictionContext(
   rules: PredictionRules,
   weather: { id: string; condition: WeatherCondition } | null,
   calendarEvents: Array<{ id: string; eventType: CalendarEventType }>,
+  apiHoliday: MalaysiaHolidayCheck | null = null,
 ): {
   factors: ColdStartFactorsDto;
   weatherRecordId: string | null;
   calendarEventIds: string[];
   weatherSource: "STORED_RECORD" | "CONFIGURED_FALLBACK";
-  calendarSource: "STORED_EVENTS" | "STORED_COVERAGE" | "CONFIGURED_FALLBACK";
+  calendarSource: "STORED_EVENTS" | "STORED_COVERAGE" |
+    "CONFIGURED_FALLBACK" | "MALAYSIA_HOLIDAY_API";
 } {
   if (!isCalendarDate(targetDate)) configurationError();
   const date = new Date(`${targetDate}T00:00:00Z`);
@@ -91,8 +94,10 @@ export function resolvePredictionContext(
   }
   const weatherSource = weather ? "STORED_RECORD" : "CONFIGURED_FALLBACK";
   let calendarSource: "STORED_EVENTS" | "STORED_COVERAGE" |
-    "CONFIGURED_FALLBACK";
-  if (calendarEvents.length > 0) {
+    "CONFIGURED_FALLBACK" | "MALAYSIA_HOLIDAY_API";
+  if (apiHoliday?.date === targetDate) {
+    calendarSource = "MALAYSIA_HOLIDAY_API";
+  } else if (calendarEvents.length > 0) {
     calendarSource = "STORED_EVENTS";
   } else if (rules.calendarVerifiedThrough &&
              rules.calendarVerifiedThrough >= targetDate) {
@@ -111,7 +116,7 @@ export function resolvePredictionContext(
       weatherFactor: weather
         ? rules.weatherFactors[weather.condition]
         : rules.weatherFallbackFactor!,
-      holidayFactor: calendarEvents.length > 0
+      holidayFactor: calendarEvents.length > 0 || apiHoliday?.isHoliday === true
         ? rules.holidayFactor : rules.nonHolidayFactor,
     },
     weatherRecordId: weather?.id ?? null,

@@ -1,38 +1,27 @@
 import '../../../core/network/api_client.dart';
 
 abstract class CalendarGateway {
-  Future<List<Map<String, dynamic>>> events(String date);
-  Future<Map<String, dynamic>> add(Map<String, dynamic> values);
+  Future<Map<String, dynamic>> year(int year);
+  Future<Map<String, dynamic>> refresh(int year);
 }
 
 class CalendarService implements CalendarGateway {
   CalendarService({ApiClient? apiClient}) : _api = apiClient ?? ApiClient();
   final ApiClient _api;
-
-  @override
-  Future<List<Map<String, dynamic>>> events(String date) async {
-    final uri = Uri(path: '/api/admin/calendar-events',
-      queryParameters: {'date': date});
-    final response = await _api.getJson(uri.toString());
-    final data = response['data'];
-    if (data is! List) throw const FormatException('Invalid calendar data.');
-    return data.map((item) {
-      if (item is! Map<String, dynamic>) {
-        throw const FormatException('Invalid calendar entry.');
-      }
-      return item;
-    }).toList();
-  }
-
-  @override
-  Future<Map<String, dynamic>> add(Map<String, dynamic> values) async {
-    final response = await _api.postJson('/api/admin/calendar-events', values);
+  Map<String, dynamic> _data(Map<String, dynamic> response) {
     final data = response['data'];
     if (data is! Map<String, dynamic>) {
-      throw const FormatException('Invalid saved calendar entry.');
+      throw const FormatException('Invalid KL holiday response.');
     }
     return data;
   }
 
+  @override
+  Future<Map<String, dynamic>> year(int year) async =>
+      _data(await _api.getJson('/api/admin/calendar-events?year=$year'));
+  @override
+  Future<Map<String, dynamic>> refresh(int year) async => _data(
+    await _api.postJson('/api/admin/calendar-events/refresh', {'year': year}),
+  );
   void close() => _api.close();
 }

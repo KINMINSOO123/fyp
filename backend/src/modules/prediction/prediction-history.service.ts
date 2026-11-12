@@ -4,7 +4,8 @@ import {
   type HistorySelectionResult,
 } from "./history-selection.service.js";
 
-type SalesHistoryReader = Pick<DailySalesRecordRepo, "listBeforeDate">;
+type SalesHistoryReader = Pick<DailySalesRecordRepo,
+  "listBeforeDate" | "withSavedContexts">;
 
 export class PredictionHistoryService {
   constructor(
@@ -20,6 +21,9 @@ export class PredictionHistoryService {
       await import("./daily-sales-record.repo.js")
     ).DailySalesRecordRepo();
     const rows = await repo.listBeforeDate(breadCategoryId, targetDate);
-    return this.selector.selectForCategory(rows, breadCategoryId, targetDate);
+    const selected = this.selector.selectForCategory(rows, breadCategoryId,
+      targetDate);
+    return { ...selected, observations: await repo.withSavedContexts(
+      selected.observations) };
   }
 }

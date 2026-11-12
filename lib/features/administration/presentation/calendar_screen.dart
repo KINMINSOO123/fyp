@@ -12,115 +12,134 @@ class CalendarScreen extends StatefulWidget {
 
 class _CalendarScreenState extends State<CalendarScreen> {
   late final CalendarGateway _gateway;
-  final _date = TextEditingController();
-  final _name = TextEditingController();
-  final _source = TextEditingController();
-  String _type = 'PUBLIC_HOLIDAY';
+  late final TextEditingController _year;
   bool _busy = false;
   String? _error;
-  List<Map<String, dynamic>> _events = const [];
+  Map<String, dynamic>? _summary;
 
   @override
   void initState() {
     super.initState();
     _gateway = widget.gateway ?? CalendarService();
+    _year = TextEditingController(text: '${DateTime.now().year}');
+    _load();
   }
 
   @override
   void dispose() {
-    _date.dispose();
-    _name.dispose();
-    _source.dispose();
+    _year.dispose();
     if (widget.gateway == null) (_gateway as CalendarService).close();
     super.dispose();
   }
 
-  String _message(Object error) => error is ApiException
-      ? error.message : 'Unable to load or save calendar events.';
+  int? get _selectedYear {
+    final value = int.tryParse(_year.text.trim());
+    return value != null && value >= 2000 && value <= 2100 ? value : null;
+  }
 
-  Future<void> _load() async {
+  Future<void> _run(bool refresh) async {
     if (_busy) return;
-    setState(() { _busy = true; _error = null; });
+    final year = _selectedYear;
+    if (year == null) {
+      setState(() => _error = 'Enter a year from 2000 to 2100.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      final events = await _gateway.events(_date.text.trim());
-      if (mounted) setState(() => _events = events);
+      final data = refresh
+          ? await _gateway.refresh(year)
+          : await _gateway.year(year);
+      if (mounted) setState(() => _summary = data);
     } catch (error) {
-      if (mounted) setState(() => _error = _message(error));
+      if (mounted) {
+        setState(
+          () => _error = error is ApiException
+              ? error.message
+              : 'Unable to load KL public holidays.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _add() async {
-    if (_busy) return;
-    setState(() { _busy = true; _error = null; });
-    try {
-      await _gateway.add({
-        'eventDate': _date.text.trim(), 'eventType': _type,
-        'eventName': _name.text.trim(),
-        'sourceReference': _source.text.trim(),
-      });
-      final events = await _gateway.events(_date.text.trim());
-      if (!mounted) return;
-      setState(() { _events = events; _name.clear(); _source.clear(); });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Calendar event recorded.')));
-    } catch (error) {
-      if (mounted) setState(() => _error = _message(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  Future<void> _load() => _run(false);
+  Future<void> _refresh() => _run(true);
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Calendar Events')),
-    body: SafeArea(child: ListView(padding: const EdgeInsets.all(16),
-      children: [
-        const Text('Enter events from a checked source before generating '
-          'predictions for that date. An empty list does not verify that '
-          'the date has no holiday.'),
-        const SizedBox(height: 12),
-        TextField(controller: _date, decoration: const InputDecoration(
-          labelText: 'Date (YYYY-MM-DD)', border: OutlineInputBorder())),
-        const SizedBox(height: 8),
-        OutlinedButton(onPressed: _busy ? null : _load,
-          child: const Text('Load date events')),
-        const Divider(height: 32),
-        DropdownButtonFormField<String>(initialValue: _type,
-          decoration: const InputDecoration(labelText: 'Event type',
-            border: OutlineInputBorder()),
-          items: const [
-            DropdownMenuItem(value: 'PUBLIC_HOLIDAY',
-              child: Text('Public holiday')),
-            DropdownMenuItem(value: 'SCHOOL_HOLIDAY',
-              child: Text('School holiday')),
-            DropdownMenuItem(value: 'LOCAL_EVENT', child: Text('Local event')),
-            DropdownMenuItem(value: 'RELIGIOUS_HOLIDAY',
-              child: Text('Religious holiday')),
-          ], onChanged: _busy ? null : (value) {
-            if (value != null) setState(() => _type = value);
-          }),
-        const SizedBox(height: 8),
-        TextField(controller: _name, decoration: const InputDecoration(
-          labelText: 'Event name', border: OutlineInputBorder())),
-        const SizedBox(height: 8),
-        TextField(controller: _source, decoration: const InputDecoration(
-          labelText: 'Source reference', border: OutlineInputBorder())),
-        const SizedBox(height: 8),
-        FilledButton(onPressed: _busy ? null : _add,
-          child: const Text('Record event')),
-        if (_busy) const LinearProgressIndicator(),
-        if (_error != null) Text(_error!, style: TextStyle(
-          color: Theme.of(context).colorScheme.error)),
-        const Divider(height: 32),
-        Text('Stored events (${_events.length})',
-          style: Theme.of(context).textTheme.titleMedium),
-        for (final event in _events) ListTile(
-          title: Text(event['eventName']?.toString() ?? 'Event'),
-          subtitle: Text('${event['eventType']} · '
-            '${event['sourceReference'] ?? 'Source not recorded'}'),
+  Widget build(BuildContext context) {
+    final coverage = _summary?['coverage'];
+    final events = _summary?['events'];
+    final rows = events is List ? events : const [];
+    return Scaffold(
+      appBar: AppBar(title: const Text('KL Public Holidays')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text(
+              'Published Kuala Lumpur public holidays are cached for '
+              'prediction context. The list is read-only. A missing holiday '
+              'means an ordinary day only after a successful year sync.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _year,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Year',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: _busy ? null : _load,
+                  child: const Text('Load year'),
+                ),
+                FilledButton(
+                  onPressed: _busy ? null : _refresh,
+                  child: const Text('Retry / Refresh'),
+                ),
+              ],
+            ),
+            if (_busy) const LinearProgressIndicator(),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            const SizedBox(height: 16),
+            Text(
+              coverage is Map
+                  ? 'Last successful sync: ${coverage['lastSuccessfulAt']}'
+                  : 'No successful sync recorded for this year.',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (coverage is Map)
+              Text('Refresh due: ${coverage['refreshAfter']}'),
+            const SizedBox(height: 8),
+            Text(
+              'KL public holidays (${rows.length})',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            for (final raw in rows)
+              if (raw is Map)
+                ListTile(
+                  title: Text(raw['eventName']?.toString() ?? 'Holiday'),
+                  subtitle: Text(
+                    '${raw['eventDate']} · '
+                    '${raw['sourceReference'] ?? 'Source unavailable'}',
+                  ),
+                ),
+          ],
         ),
-      ])),
-  );
+      ),
+    );
+  }
 }

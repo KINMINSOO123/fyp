@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Current proposed design, reconciled 2026-10-11 with [the latest report mirror](../RSW_SooKinMin_Project1.docx.md), Sections 4.2-4.5, 4.8-4.10. The DOCX governs. This document is not evidence of implemented components. The earlier July 2026 architecture was a planning snapshot, not a higher authority.
+Historical proposed design reconciled 2026-10-11 with [the latest report mirror](../RSW_SooKinMin_Project1.docx.md), Sections 4.2-4.5, 4.8-4.10. The DOCX remains the report's source; the user-requested restock workflow below is a later technical extension for separate report revision. Local code and staged migrations are not live verification. The earlier July 2026 architecture was a planning snapshot, not a higher authority.
 
 ## 1. Component boundaries
 
@@ -77,6 +77,8 @@ Use one validated observation/category/day in ACTUAL_TRANSACTION -> IMPORTED_HIS
 ## 5. Operational transaction boundaries
 
 `RecommendationEngine` reads stored predictions; it never generates predictions. It reserves confirmed/unprocessed commitments in a temporary dated ingredient balance, then processes remaining categories by ascending display_order, subtracting each feasible recommendation before the next. `ProductionDecisionService` replaces an edited quantity, jointly validates outstanding decisions, and records confirmation/reason without deducting inventory.
+
+`RestockService` separately sums desired units for all unprocessed categories: selected quantities for confirmed decisions and predicted units for unconfirmed ones. It compares joint recipe grams with batches valid on the production date and shows positive shortages even when a reduced recommendation fits. A manager confirms a restock request; a SQL RPC recomputes under the inventory-master and production-date locks and stores request/items without increasing stock. The bakery administrator reviews it and records each physical arrival through the existing batch receipt operation within a linked wrapper transaction. Partial receipts and audited cancellation update request fulfilment only; pending grams are never available stock. An `ADMINISTRATIVE_EVENT` targets active administrators through recipient preferences. This extension does not change FEFO, confirmation or POS stock checks.
 
 `PosSimulationService` requires stored predictions and explicit manager-confirmed decisions for the selected date (current date by default). `SimulationCommitRepo` owns one PostgreSQL transaction/RPC, locking operational records and relevant inventory, revalidating joint commitments, deducting FEFO before sales, and persisting batch/snapshot movements, production, transaction detail, results and simulation-origin daily history together. Other outstanding commitments must remain feasible. Consistent locks plus unique decision/production/result references prevent duplicate deductions. All failure paths roll back the transaction; compensating batches are not a substitute.
 

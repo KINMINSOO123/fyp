@@ -3,6 +3,7 @@ import '../domain/daily_prediction.dart';
 
 abstract interface class PredictionGateway {
   Future<NextPredictionState> getNextDayState();
+  Future<List<DailyPrediction>> getByDate(String date);
   Future<void> generateNextDay();
 }
 
@@ -20,6 +21,17 @@ class PredictionService implements PredictionGateway {
       throw const FormatException('Invalid next-day prediction response.');
     }
     return NextPredictionState.fromJson(data);
+  }
+
+  @override
+  Future<List<DailyPrediction>> getByDate(String date) async {
+    final data = (await _apiClient.getJson('/api/predictions/$date'))['data'];
+    if (data is! List || data.any((item) => item is! Map<String, dynamic>)) {
+      throw const FormatException('Invalid saved prediction response.');
+    }
+    return data
+        .map((item) => DailyPrediction.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
   @override

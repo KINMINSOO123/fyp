@@ -4,13 +4,13 @@
 
 **Historical audit snapshot:** 31 July 2026. **Current reconciliation:** 11 October 2026.
 **Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, especially Sections 4.5.1-4.5.4, 4.7-4.9 and Chapter 3 BR/FR/NFR tables. The repository [report mirror](RSW_SooKinMin_Project1.docx.md) is a reading aid; the DOCX controls requirements.
-**Status:** documentation review and future verification plan; no database functionality or test pass is claimed.
+**Status:** historical report-derived catalogue plus staged restock and 2026-11-12 KL holiday extensions; no live extension migration or database test pass is claimed.
 
 ## 1. Evidence and historical status
 
 The July audit found a Flutter starter and planning Markdown, with no implemented Smart Bakery schema, generated database types, Node backend or FastAPI service. Its older table counts and proposed fixes were observations about that historical plan, not a competing specification. This reconciliation replaces their active guidance with the report's Section 4.5 catalogue. Deletion of `FYP Report.md` is retained; no replacement implementation/testing chapters are invented.
 
-The current repository still supplies the starter and plans, not verified backend/ML/database functionality. SQL, types, Repos, policies and RPC names in Markdown remain proposed artifacts. Neither this review nor the historical audit proves any Supabase deployment exists. No package install, migration, application implementation or runtime test is part of this change.
+The preceding historical audit describes the 2026-10 planning state. The current repository includes backend, Flutter, FastAPI and staged migrations, but this document does not infer live Supabase state. The restock and KL holiday migrations are staged and have not been applied or database-tested in this update.
 
 ## 2. Catalogue and count checks
 
@@ -19,15 +19,15 @@ The detailed field dictionary, keys and ERD are in [database_canonical_design.md
 | Group | Public application tables | Count |
 |---|---|---:|
 | Access/configuration | `user_profiles`, `bakery_settings`, `system_settings` | 3 |
-| Catalogue/inventory | `bread_categories`, `ingredients`, `recipes`, `inventory`, `inventory_batches`, `inventory_log` | 6 |
-| Context/history/models/prediction | `weather_records`, `calendar_events`, `daily_sales_records`, `ml_model_versions`, `model_evaluations`, `feature_importance`, `daily_predictions`, `prediction_calendar_events` | 8 |
+| Catalogue/inventory/restock | `bread_categories`, `ingredients`, `recipes`, `inventory`, `inventory_batches`, `inventory_log`, `restock_requests`, `restock_request_items` | 8 |
+| Context/history/models/prediction | `weather_records`, `calendar_events`, `kl_holiday_syncs`, `daily_sales_records`, `ml_model_versions`, `model_evaluations`, `feature_importance`, `daily_predictions`, `prediction_calendar_events` | 9 |
 | Production/POS/surplus | `production_decisions`, `daily_production`, `daily_results`, `sales_transactions`, `charity_partners`, `donations`, `waste_records` | 7 |
 | Notifications/audit | `notifications`, `notification_preferences`, `fcm_tokens`, `notification_deliveries`, `system_logs` | 5 |
-| **Total public application tables** | | **29** |
+| **Total staged public application tables** | | **32** |
 
-Additionally show **one external Supabase-managed `auth.users` table** and **one computed `sales_by_timeslot` view**. The schema has **zero PostgreSQL enum types**: its **21 controlled-value domains** use text CHECK constraints and corresponding application types. View outputs, DTOs, model artifacts, reports, recommendations, `DailyContext`, `SimulationRun` and `LeftoverRecord` are not additional base tables.
+The report-derived baseline remains 29 tables; two restock tables and one KL holiday coverage table make the staged design 32. Additionally show **one external Supabase-managed `auth.users` table** and **one computed `sales_by_timeslot` view**. The staged schema has **zero PostgreSQL enum types**: its **24 controlled-value domains**, including restock status, holiday provider and state, use text CHECK constraints and corresponding application types. View outputs, DTOs, model artifacts, reports, recommendations, `DailyContext`, `SimulationRun` and `LeftoverRecord` are not additional base tables.
 
-The 21 domains are user role, account status, setting data type, data origin, ingredient unit, inventory batch status, inventory movement reason, weather condition, calendar-event type, model type, model lifecycle, evaluation label, prediction mode, production option, sales time slot, donation status, notification severity, notification type, push status, audit outcome and audit severity. Their exact values are maintained in the canonical design Section 3.
+The 24 domains are user role, account status, setting data type, data origin, ingredient unit, inventory batch status, inventory movement reason, restock request status, weather condition, calendar-event type, KL holiday provider, KL holiday state, model type, model lifecycle, evaluation label, prediction mode, production option, sales time slot, donation status, notification severity, notification type, push status, audit outcome and audit severity. Their exact values are maintained in the canonical design Section 3.
 
 ## 3. Schema and relationship verification
 
@@ -40,7 +40,10 @@ These checks are to run after implementation; all are currently **PLANNED**.
 | Settings | Unique key, validated JSON/data type and updater; no provider secrets in DB/client | Table 4.15, NFR-SEC-05 |
 | Recipe | Unique category/ingredient pair; positive grams; configured active catalogue, not four-category/five-ingredient caps | Table 4.16 |
 | Batch | Positive initial grams, remainder 0..initial, expiry later than receipt, immutable unit-cost snapshot | Tables 4.16, 4.20 |
+| Restock extension | Manager FK, one active request/date, unique ingredient/request, optional batch/item link with matching ingredient and unique retry key; requested = received + cancelled + outstanding | `EXT-RST-01`–`EXT-RST-06` (2026-11-11 user extension; report update pending) |
 | Source identity | SIMULATION_GENERATED requires unique source result and validation; actual/imported require external source reference and no result link | Sections 4.5.3-4.5.4 |
+| Saved historical context | Selected simulation record's result and prediction match category/date; valid saved four factors pass to ML, absent factors default with an indicator, malformed factors fail | 2026-11-12 user change; report update pending |
+| KL holiday coverage | Successful KUL year coverage is separate from matching events; repeat sync does not duplicate; corrections retain old rows/links while future predictions use current events | 2026-11-12 user change; report update pending |
 | Observation uniqueness | Unique category/date/origin; one selected validated observation per category/day in actual -> imported -> simulation priority | BR-DP-03-04, Section 4.5.4 |
 | Prediction mode | MODEL requires non-null model reference and 0..100 confidence; COLD_START requires both NULL | NFR-ACC-08, Section 4.5.3 |
 | Model governance | One ACTIVE RF version/category; candidate/evaluation/activation/restoration separate; retain history and untouched holdout provenance | FR-DP-09-12, NFR-ACC-01-05 |
@@ -52,6 +55,18 @@ These checks are to run after implementation; all are currently **PLANNED**.
 | Historical integrity | RESTRICT retained links; deactivate master/profile/token records; append-only non-secret audit events | Section 4.5.4, NFR-DAT-03 |
 
 ## 4. Required behavioural and failure checks
+
+The following restock checks are **planned for an isolated database after applying `20261111000100_restock_requests.sql`**, never claimed as live passes. Use a next-day stored prediction set, active recipes, two shared ingredients and separate manager/administrator profiles. Run receipts in a transactionally isolated test project or roll back controlled fixtures.
+
+| ID | Restock extension check | Expected result |
+|---|---|---|
+| DB-RST-01 | Two categories share flour; predicted desired units need more flour than valid stock although sequential reduced recommendations fit | Preview and locked submission report the combined positive gram shortfall; invalid/expired/future batches and processed production are excluded |
+| DB-RST-02 | Two managers submit the same date concurrently or retry while PENDING/PARTIALLY_RECEIVED | Partial unique index permits only one active request; no inventory or decision row changes |
+| DB-RST-03 | Manager attempts linked receipt/cancel; administrator attempts request submission | Both cross-role operations rejected; no data mutation |
+| DB-RST-04 | Admin receives part of item with receipt key, then retries identical call | One batch, one RESTOCK movement and one snapshot increment; request remains PARTIALLY_RECEIVED with exact received/outstanding grams |
+| DB-RST-05 | Admin receives remaining grams using a new key; a receipt exceeds outstanding | Full receipt becomes FULFILLED; excess is rejected and rolls back batch/snapshot/movement/status together |
+| DB-RST-06 | Admin cancels outstanding grams after a partial receipt with reason | Received stock remains, cancelled equals former outstanding, status CLOSED and audit event records actual actor/reason; no second stock increment |
+| DB-RST-07 | Manager refreshes planning after linked receipt | New valid batch affects recommendations by FEFO eligibility; pending request quantity never appears in available stock; confirmation and POS still reject infeasible production |
 
 | ID | Planned scenario | Expected result |
 |---|---|---|

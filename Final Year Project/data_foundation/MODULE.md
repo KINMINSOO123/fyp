@@ -3,7 +3,7 @@
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
 **Technical build module:** 0; first foundation dependency for modules 1-6.
-**Status:** reconciled design, 11 October 2026; proposed database, contracts and checks, not implemented functionality.
+**Status:** 11 October 2026 report-derived design audit; 2026-11-11 local restock schema extension staged, not applied or live-verified.
 **Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.3-1.4, 3.3-3.5, 4.2, 4.5, 4.7-4.9. Read with the [report mirror](../../RSW_SooKinMin_Project1.docx.md), [canonical schema](../../database_canonical_design.md) and [verification plan](../../database_schema_verification.md).
 
 ## 1. Purpose, scope and functional mapping
@@ -16,7 +16,7 @@ Technical build numbers 0-6 describe delivery dependencies; they are not replace
 |---|---|---|
 | 1. User and Access Management | Profiles, single role, account status, Auth identity references | 1 middleware; 6 checks |
 | 2. Demand Prediction | History/provenance, context, prediction and model/evaluation metadata | 1 middleware; 2 ML |
-| 3. Inventory and Smart Production Recommendation | Categories, ingredients, recipes, batches, movements, decisions | 1 middleware; 3 inventory |
+| 3. Inventory and Smart Production Recommendation | Categories, ingredients, recipes, batches, movements, decisions; later manager restock request/items and linked administrator receipts | 1 middleware; 3 inventory |
 | 4. POS and Sales Simulation | Unique decision/production/result graph, sale snapshots, simulation history | 4 POS |
 | 5. Leftover, Donation and Waste Management | Normalized charity/allocation records and result balance | 5 donation/dashboard |
 | 6. Reporting and Dashboard | Source records, derived calculation contracts and view | 5 donation/dashboard |
@@ -30,13 +30,13 @@ The full field dictionary is [canonical schema Sections 3-7](../../database_cano
 | Group | Application tables | Count |
 |---|---|---:|
 | Access/configuration | `user_profiles`, `bakery_settings`, `system_settings` | 3 |
-| Catalogue/inventory | `bread_categories`, `ingredients`, `recipes`, `inventory`, `inventory_batches`, `inventory_log` | 6 |
-| Context/history/models | `weather_records`, `calendar_events`, `daily_sales_records`, `ml_model_versions`, `model_evaluations`, `feature_importance`, `daily_predictions`, `prediction_calendar_events` | 8 |
+| Catalogue/inventory/restock | `bread_categories`, `ingredients`, `recipes`, `inventory`, `inventory_batches`, `inventory_log`, `restock_requests`, `restock_request_items` | 8 |
+| Context/history/models | `weather_records`, `calendar_events`, `kl_holiday_syncs`, `daily_sales_records`, `ml_model_versions`, `model_evaluations`, `feature_importance`, `daily_predictions`, `prediction_calendar_events` | 9 |
 | Operations/surplus | `production_decisions`, `daily_production`, `daily_results`, `sales_transactions`, `charity_partners`, `donations`, `waste_records` | 7 |
 | Notifications/audit | `notifications`, `notification_preferences`, `fcm_tokens`, `notification_deliveries`, `system_logs` | 5 |
-| **Total** | **Public application tables** | **29** |
+| **Total staged** | **Public application tables** | **32** |
 
-Also reference one external Supabase `auth.users` table and one computed `sales_by_timeslot` view. There are **0 PostgreSQL enum types**, with **21 text CHECK controlled domains** as enumerated in the canonical document. TypeScript unions, Pydantic literals and Dart mappings reflect those same values; they are not extra database tables/types. Recommendations, `DailyContext`, DTOs, model files, report/export files, `SimulationRun` and `LeftoverRecord` are not base tables.
+The report-derived baseline had 29 tables; two restock tables and one KL holiday coverage table bring the staged catalogue to 32. Also reference one external Supabase `auth.users` table and one computed `sales_by_timeslot` view. There are **0 PostgreSQL enum types**, with **24 text CHECK controlled domains** including restock status, holiday provider and state in the canonical document. The KL holiday migration is staged, not applied live. TypeScript unions, Pydantic literals and Dart mappings are not extra database tables/types. Recommendations, `DailyContext`, DTOs, model files, report/export files, `SimulationRun` and `LeftoverRecord` are not base tables.
 
 Use UUID identity keys; profile key is the Auth UUID, and notification preferences/prediction-calendar junctions have composite keys. Quantities use whole integer bread units or numeric grams; monetary snapshots use decimal numeric values. Dates are bakery-local business dates and event timestamps are `timestamptz`. Database snake_case maps explicitly to domain camelCase; preserve uppercase controlled values.
 

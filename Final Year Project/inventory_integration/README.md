@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially FR-INV-01–12, Sections 4.5.3–4.5.4, Table 4.27 and Sections 4.7.2/4.9.3. That is a historical design audit. As of 2026-11-04, Node has shared-balance recommendations, manager confirmation/revision and administrator catalogue, recipe, receipt and batch-removal endpoints with automated tests. Flutter has manager Production Planning and administrator Inventory Administration screens. The sixth and seventh SQL migrations stage audited confirmation and inventory-administration RPCs; neither has been applied or verified live. FEFO production deduction, POS integration, notifications and reporting remain planned.
+Reconciled on 2026-10-11 from the latest `RSW_SooKinMin_Project1 (1).docx`, especially FR-INV-01–12, Sections 4.5.3–4.5.4, Table 4.27 and Sections 4.7.2/4.9.3. That is a historical design audit. **Current local status (2026-11-11):** Node and Flutter additionally implement the user-requested restock preview, request and administrator receipt/review flow. `20261111000100_restock_requests.sql` is staged, not applied or live-verified. This extension requires a separate report revision; it is not claimed as an original report requirement.
 
 See [module mapping](MODULE.md), [architecture](../ARCHITECTURE.md), [canonical schema](../../database_canonical_design.md), [logical design](../../logical_view_canonical_design.md), [POS transaction](../pos_simulation/README.md) and [traceability](../../planning_documents_change_report.md).
 
@@ -14,6 +14,8 @@ Technical Module 3 delivers Inventory and Smart Production Recommendation and su
 |---|---|---|
 | Ingredient/category/recipe administration | SYSTEM_ADMINISTRATOR | Implemented `InventoryAdminController → InventoryAdminService → InventoryAdminRepo`; staged RPC for atomic writes |
 | Batch receipt/restock and stock removal | SYSTEM_ADMINISTRATOR | Same implemented Node boundary; staged atomic batch/snapshot/movement/audit RPC |
+| Restock request and desired-stock preview | BAKERY_MANAGER | `RestockController → RestockService → RestockRepo`; server derives desired quantities and shortage |
+| Restock review, linked receipt and cancellation | SYSTEM_ADMINISTRATOR | `RestockAdminScreen`; existing `POST /api/admin/inventory/batches` receipt path with optional request item/key; staged atomic wrapper RPC |
 | Recommendation review | BAKERY_MANAGER | `RecommendationController → RecommendationEngine` |
 | Production confirmation/revision | BAKERY_MANAGER | `ProductionDecisionController → ProductionDecisionService` |
 | Permitted inventory/report viewing | Both ACTIVE roles | Read Service/Repo DTOs |
@@ -39,6 +41,18 @@ Recipes store positive `grams_per_unit`. Ingredient inventory, batches and movem
 | `DailyPredictionRepo`, `ProductionDecisionRepo`, `DailyProductionRepo` | Stored prediction, outstanding commitments and processed-state lookup |
 
 Controllers delegate to Services. Services use Repos for PostgreSQL; route modules only register class handlers. No `RecommendationEngine` method generates predictions, calls FastAPI or trains a model. Financial values never determine production quantities.
+
+## Restock request extension - 2026-11-11
+
+This is a user-requested technical extension to the report's inventory flow. The `SYSTEM_ADMINISTRATOR` is the bakery business administrator, not a separate IT-only account. `EXT-RST-01` covers joint desired-quantity shortages; `EXT-RST-02` covers manager-confirmed requests and duplicate prevention; `EXT-RST-03` covers recipient administrator notification; `EXT-RST-04` covers linked partial batch receipts; `EXT-RST-05` covers audited cancellation of outstanding grams; and `EXT-RST-06` covers role enforcement. These are local extension IDs, not IDs claimed to occur in the current report.
+
+`GET /api/restock-requests/preview/:date` shows each unprocessed category's desired units: confirmed manager-selected units where a decision exists, otherwise the stored prediction. It sums each recipe's grams across all categories before comparing with valid batch stock on the production date. Processed production is excluded because its stock was already deducted. The preview reports `requiredGrams`, `availableGrams` and positive `additionalGrams` per ingredient even when the sequential production recommendation is feasible at a lower quantity. It does not reserve stock.
+
+The manager sees the date, desired units and ingredient shortfalls in Production Planning and explicitly confirms `POST /api/restock-requests` with the displayed snapshot. Node recomputes it and the staged `submit_restock_request` RPC recomputes it again under the same inventory-master and production-date locks used by inventory and production decisions. A changed preview returns a conflict; a partial unique index prevents a second active request for the date. The request stores its manager, production date, desired category snapshot, status and timestamps; item rows store requested shortfall grams. Submission changes neither `inventory` nor `production_decisions`. The existing `ADMINISTRATIVE_EVENT` notification path targets active administrators according to their personal preferences; notification delivery remains best effort after commit.
+
+`GET /api/admin/restock-requests` lists pending and historical requests with requested, received, cancelled and outstanding grams. The administrator records each physical receipt through the **existing** `POST /api/admin/inventory/batches` contract, adding `restockRequestItemId` and a UUID `receiptKey`. `receive_restock_batch` locks the request and inventory, checks outstanding quantity, calls the existing audited `RECEIVE_BATCH` operation once, links the new batch to the request item, and updates request status in that same transaction. A repeated identical receipt key returns the original batch without another stock increment; a changed replay is rejected. Each batch retains actual receipt date, expiry date, source and MYR/kg cost snapshot. Partial receipts remain `PARTIALLY_RECEIVED`; all quantities fulfilled become `FULFILLED`. `POST /api/admin/restock-requests/:id/cancel` cancels only outstanding grams with an audit reason; a wholly unreceived request becomes `CANCELLED`, while a partly received and then cancelled request becomes `CLOSED`. Cancellation and status updates never increment stock.
+
+After a receipt, the manager refreshes Production Planning. Valid batch stock is recalculated; pending request quantities are never included. Confirmation and POS still perform their own stock checks. FEFO ordering, prediction and model evaluation are unchanged. No supplier, purchase order or payment integration is added.
 
 Proposed response mapping:
 
@@ -227,10 +241,13 @@ Module 4 snapshots transaction selling prices and stores consistent daily totals
 | `GET/POST /api/admin/inventory/batches`; `PATCH /api/admin/inventory/batches/:batchId/stock` | Administrator, implemented | Receipt and reasoned stock removal; batch cost snapshot and signed movement in staged RPC |
 | `GET /api/recommendations/:date` with optional `revisingPredictionId` | Manager | Stored-prediction joint planning, shortage explanations and a fresh revision preview |
 | `PUT /api/production-decisions` | Manager | Explicit confirmed quantity or unprocessed revision |
+| `GET /api/restock-requests/preview/:date`; `POST/GET /api/restock-requests` | Manager | Desired-quantity shortfall, confirmed request and own status/history |
+| `GET /api/admin/restock-requests`; `POST /api/admin/restock-requests/:id/cancel` | Administrator | Review partial fulfilment; cancel only outstanding grams with reason |
+| `POST /api/admin/inventory/batches` with `restockRequestItemId`, `receiptKey` | Administrator | Existing batch receipt, linked to request item and idempotent retry |
 
 There is no public ingredient-deduction endpoint: POS invokes the protected internal transaction. Referenced batches and movements cannot be deleted or recosted by generic CRUD; administrative operations preserve audit/history.
 
-The implemented `InventoryAdminScreen` exposes category, ingredient, recipe and batch forms to the administrator; the implemented `ProductionPlanningScreen` displays the stored prediction, mode-aware confidence, joint capacity and shortages. It never shows a cold-start percentage and requires explicit confirmation and reasons where applicable. Further date-aware stock and movement views remain planned. Managers cannot use administrator restocking routes.
+The implemented `InventoryAdminScreen` exposes category, ingredient, recipe and ordinary batch forms to the administrator; `RestockAdminScreen` reviews requests and uses the same batch receipt endpoint for linked arrivals. `ProductionPlanningScreen` displays prediction, mode-aware confidence, joint capacity and desired-production shortfalls, with manager confirmation before requesting stock. It never shows a cold-start percentage. Managers cannot use administrator receipt/cancellation routes.
 
 Low-stock, expiry and external/system-failure events pass through Module 1's `NotificationService`. Notification rows identify one `recipient_user_id`; preferences are per type/user. Foreground visibility and read state are recipient-only through Supabase Realtime's narrow read policy. Node owns writes/mark-read. Push uses only active valid tokens belonging to that opted-in recipient and records PENDING, SUBMITTED, DELIVERED, FAILED or SKIPPED attempts; SUBMITTED is not confirmed delivery. No global broadcast/deduplication assumption applies.
 
@@ -238,7 +255,7 @@ Low-stock, expiry and external/system-failure events pass through Module 1's `No
 
 Remaining implementation order:
 
-1. Apply and validate both staged production-confirmation and inventory-administration RPCs against the live schema; verify locks, category activation rules, audited stock movements, revision replacement and rollback. The Node/Flutter paths exist but live database behavior is unverified.
+1. In an isolated database, apply and validate the existing confirmation/inventory RPCs and the new restock migration in filename order; verify locks, duplicate requests, partial receipts, retry keys, audited stock movements and rollback. The Node/Flutter paths exist but live database behavior is unverified.
 2. Implement expiry-ordered production movement planning and batch snapshot cost calculations.
 3. Integrate those components into the single POS transaction before exposing operational simulation.
 4. Add recipient event integration and shared report/export inputs.

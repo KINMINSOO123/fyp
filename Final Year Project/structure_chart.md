@@ -23,6 +23,8 @@ flowchart TD
   I --> I1[Admin ingredients / batches / categories / recipes]
   I --> I2[Joint temporary balance; confirmed commitments; display-order allocation]
   I --> I3[Manager confirms feasible quantity and override reason]
+  I --> I4[Manager sees desired-production shortages and requests restock]
+  I --> I5[Bakery administrator reviews request and receives linked batches]
   X --> X1[Selected-date prediction and confirmed decision required]
   X --> X2[Atomic expiry-order FEFO; sales; results; validated simulation history]
   L --> L1[Manager-confirmed positive donation or waste]
@@ -46,7 +48,11 @@ Managers generate predictions, review/confirm production, run simulation and all
 flowchart LR
   H[Validated daily history and context] --> P[Manager requests prediction]
   P --> B[Joint recommendation from valid batches]
-  B --> C[Manager confirms production]
+  B --> Q{Desired production exceeds valid stock?}
+  Q -->|yes| RR[Manager confirms restock request]
+  RR --> RA[Administrator receives physical batch; request fulfilment updates]
+  RA --> B
+  Q -->|no or reduced plan accepted| C[Manager confirms production]
   C --> T[Manager requests current or selected date simulation]
   T --> V[Lock; verify prediction and confirmed plan; revalidate ingredients]
   V --> F[Deduct expiry_date then received_date then id FEFO]

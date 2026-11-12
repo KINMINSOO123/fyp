@@ -31,3 +31,19 @@ test("T-DP-GEN-07 [FR-DP-04, NFR-REL-03]: configured context fallback is explici
   (error: unknown) => error instanceof AppError &&
     error.code === "PREDICTION_CONFIG_INCOMPLETE");
 });
+
+test("T-DP-HOL-04 [FR-DP-04]: API holiday and verified ordinary day use distinct factors", () => {
+  const rules = parsePredictionRules({ ...neutral,
+    holidayFactor: 1.3, nonHolidayFactor: 1,
+    allowCalendarFallback: false });
+  const source = { date: "2026-11-09", stateCode: "KUL",
+    sourceUrl: "https://malaysia-holiday.dydxsoft.my/api/v1/holidays",
+    holidays: [] };
+  const ordinary = resolvePredictionContext("2026-11-09", rules, null, [],
+    { ...source, isHoliday: false });
+  assert.equal(ordinary.calendarSource, "MALAYSIA_HOLIDAY_API");
+  assert.equal(ordinary.factors.holidayFactor, 1);
+  const holiday = resolvePredictionContext("2026-11-09", rules, null, [],
+    { ...source, isHoliday: true });
+  assert.equal(holiday.factors.holidayFactor, 1.3);
+});

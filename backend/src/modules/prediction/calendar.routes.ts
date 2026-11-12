@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { CalendarController } from "./calendar.controller.js";
+import { KlHolidayController } from "./kl-holiday.controller.js";
 
 const router = Router();
-const controller = new CalendarController();
+const controller = new KlHolidayController();
 router.get("/", controller.list);
-router.post("/", controller.add);
+router.post("/refresh", controller.refresh);
 export default router;

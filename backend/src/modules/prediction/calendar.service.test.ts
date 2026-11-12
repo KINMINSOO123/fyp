@@ -5,40 +5,16 @@ import express from "express";
 import { createAuthenticate } from "../../middleware/authenticate.js";
 import { errorHandler } from "../../middleware/errorHandler.js";
 import { requireRole } from "../../middleware/requireRole.js";
-import { AppError } from "../../shared/AppError.js";
-import { CalendarController } from "./calendar.controller.js";
-import { CalendarService } from "./calendar.service.js";
+import { KlHolidayController } from "./kl-holiday.controller.js";
 
-test("T-DP-CAL-01 [FR-DP-04, FR-ADM-02]: calendar entry requires source and valid type", async () => {
-  const saved: unknown[] = [];
-  const service = new CalendarService({
-    async list() { return []; },
-    async add(actor, entry) { saved.push({ actor, entry }); return entry; },
+test("T-DP-CAL-01 [BR-UAM-02, FR-ADM-02]: only administrator can inspect and refresh KL holidays", async () => {
+  const calls: string[] = [];
+  const controller = new KlHolidayController({
+    async list(year) { calls.push(`list:${year}`); return {
+      year, stateCode: "KUL", coverage: null, events: [] }; },
+    async refresh(actor, year) { calls.push(`refresh:${actor}:${year}`);
+      return { year, stateCode: "KUL", coverage: null, events: [] }; },
   });
-  const entry = { eventDate: "2026-11-11", eventType: "PUBLIC_HOLIDAY",
-    eventName: " Verified event ", sourceReference: " official.example/reference " };
-  const result = await service.add("admin", entry);
-  assert.equal(result.eventName, "Verified event");
-  assert.deepEqual(saved, [{ actor: "admin", entry: {
-    ...entry, eventName: "Verified event",
-    sourceReference: "official.example/reference",
-  } }]);
-  for (const invalid of [{ ...entry, sourceReference: " " },
-    { ...entry, eventType: "UNKNOWN" },
-    { ...entry, eventDate: "2026-02-30" },
-    { ...entry, role: "SYSTEM_ADMINISTRATOR" }]) {
-    await assert.rejects(service.add("admin", invalid),
-      (error: unknown) => error instanceof AppError &&
-        error.code === "VALIDATION_ERROR");
-  }
-  assert.equal(saved.length, 1);
-});
-
-test("T-DP-CAL-02 [BR-UAM-02, FR-ADM-02]: manager cannot enter or view administrator calendar", async () => {
-  const controller = new CalendarController(new CalendarService({
-    async list() { return []; },
-    async add(_actor, entry) { return entry; },
-  }));
   const app = express();
   app.use(express.json(), createAuthenticate({ async authenticate(token) {
     return { userId: token, fullName: "Test", accountStatus: "ACTIVE" as const,
@@ -46,7 +22,7 @@ test("T-DP-CAL-02 [BR-UAM-02, FR-ADM-02]: manager cannot enter or view administr
         "BAKERY_MANAGER" as const };
   } }), requireRole("SYSTEM_ADMINISTRATOR"));
   app.get("/calendar", controller.list);
-  app.post("/calendar", controller.add);
+  app.post("/calendar/refresh", controller.refresh);
   app.use(errorHandler);
   const server = await new Promise<Server>((resolve) => {
     const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -56,17 +32,21 @@ test("T-DP-CAL-02 [BR-UAM-02, FR-ADM-02]: manager cannot enter or view administr
     if (!address || typeof address === "string") throw new Error("No port.");
     const base = `http://127.0.0.1:${address.port}/calendar`;
     for (const method of ["GET", "POST"]) {
-      const denied = await fetch(`${base}?date=2026-11-11`, {
-        method, headers: { Authorization: "Bearer manager",
+      const denied = await fetch(method === "GET" ? `${base}?year=2026` :
+        `${base}/refresh`, { method,
+        headers: { Authorization: "Bearer manager",
           "Content-Type": "application/json" },
-        ...(method === "POST" ? { body: JSON.stringify({}) } : {}),
+        ...(method === "POST" ? { body: JSON.stringify({ year: 2026 }) } : {}),
       });
       assert.equal(denied.status, 403);
     }
-    const allowed = await fetch(`${base}?date=2026-11-11`, {
-      headers: { Authorization: "Bearer admin" },
-    });
+    assert.equal(calls.length, 0);
+    const allowed = await fetch(`${base}/refresh`, { method: "POST",
+      headers: { Authorization: "Bearer admin",
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ year: 2026 }) });
     assert.equal(allowed.status, 200);
+    assert.deepEqual(calls, ["refresh:admin:2026"]);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) =>
       error ? reject(error) : resolve()));

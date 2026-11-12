@@ -2,11 +2,11 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Status:** PLANNED CANONICAL DESIGN — NOT IMPLEMENTED
+**Status:** Report-derived canonical design with later staged local extensions; the 2026-11-11 restock and 2026-11-12 KL holiday changes are not yet reflected in the report or applied live
 **Historical design snapshot:** 31 July 2026; reconciled 11 October 2026
 **Chapter target:** Chapter 4.5.2 Entity-Relationship Diagram
 **Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, especially §§4.5.1–4.5.4, 4.7–4.9; repository report mirror: [RSW_SooKinMin_Project1.docx.md](RSW_SooKinMin_Project1.docx.md)
-**Implementation scope:** Design only; this document is not a migration and does not modify application code
+**Implementation scope:** Schema and workflow reference; executable extensions are in `supabase/migrations/20261111000100_restock_requests.sql` and `supabase/migrations/20261112000100_kl_holiday_sync.sql`
 
 ## 1. Authority and implementation status
 
@@ -19,7 +19,7 @@ This is the current reconciled planning design. The latest DOCX takes precedence
 - Historical operational records are retained; master data is deactivated rather than cascade-deleted.
 - The POS completion workflow is one Node-owned PostgreSQL transaction/RPC.
 
-No table in this document is implementation-verified. The complete design remains **PLANNED** until migrations, generated database types and application Repos exist.
+The historical report-derived catalogue had 29 public tables. The staged restock extension adds two tables and the KL holiday coverage extension adds one. Local migrations and application Repos now exist, but this document does not assert which migrations have been applied to the live Supabase project. These extensions are staged and unverified live.
 
 The application serves one bakery on Android. Four example categories and five ingredients are seed examples, not limits; algorithms handle configured active categories and the reference workload of up to 20 categories. No customer ordering/payment, delivery/marketplace, real POS hardware, multi-branch operation or automatic background scheduling is introduced.
 
@@ -51,8 +51,11 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Ingredient unit | `G`, `KG` |
 | Inventory batch status | `ACTIVE`, `DEPLETED`, `EXPIRED`, `DISCARDED` |
 | Inventory movement reason | `RESTOCK`, `PRODUCTION_DEDUCTION`, `PRODUCTION_REVERSAL`, `DISCARD`, `CORRECTION` |
+| Restock request status (2026-11-11 extension) | `PENDING`, `PARTIALLY_RECEIVED`, `FULFILLED`, `CANCELLED`, `CLOSED` |
 | Weather condition | `CLEAR`, `CLOUDY`, `RAIN`, `STORM`, `OTHER` |
 | Calendar-event type | `PUBLIC_HOLIDAY`, `SCHOOL_HOLIDAY`, `LOCAL_EVENT`, `RELIGIOUS_HOLIDAY` |
+| KL holiday provider (2026-11-12 extension) | `MALAYSIA_HOLIDAY_API` |
+| KL holiday state (2026-11-12 extension) | `KUL` |
 | Model type | `RANDOM_FOREST`, `LINEAR_REGRESSION` |
 | Model lifecycle | `CANDIDATE`, `ACTIVE`, `INACTIVE`, `REJECTED` |
 | Evaluation label | `ACTUAL_ONLY`, `IMPORTED_HISTORICAL_ONLY`, `SIMULATION_BASED`, `MIXED_NON_SIMULATION` |
@@ -82,8 +85,11 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Inventory | `inventory` | Cached current ingredient quantity |
 | Inventory | `inventory_batches` | FEFO/expiry lots and received unit-cost snapshot |
 | Inventory | `inventory_log` | Batch-level stock movements grouped by an operation UUID |
-| Context | `weather_records` | Normalized daily weather cache |
-| Context | `calendar_events` | Normalized holiday/event cache |
+| Restock extension | `restock_requests` | Manager/date desired-production snapshot and fulfilment state |
+| Restock extension | `restock_request_items` | Requested and cancelled grams per ingredient; received grams derive from linked batches |
+| Context | `weather_records` | Daily forecast cache and provenance, not observed historical weather |
+| Context | `calendar_events` | Current KL public holidays plus retained historical event rows |
+| Context extension | `kl_holiday_syncs` | Successful KUL year coverage and refresh metadata |
 | ML history | `daily_sales_records` | Validated units-sold observations with exact source provenance |
 | ML governance | `ml_model_versions` | Retained model candidate/active/inactive/rejected metadata |
 | ML governance | `model_evaluations` | Origin-labelled chronological-holdout metrics |
@@ -105,7 +111,7 @@ In the planned canonical schema, these values are represented by CHECK constrain
 
 `sales_by_timeslot` remains a computed PostgreSQL view, not a base table.
 
-Counts derived from this catalogue: **29 public application tables**, **1 external Auth table**, **1 computed view**, and **0 PostgreSQL enum types**. Section 3 has **21 controlled-value domains**, implemented as text CHECK constraints; these are not 21 database enum types. Pending-action indicators are derived on app open/refresh or explicit state requests, not scheduled reminder rows.
+Counts derived from this staged catalogue: **32 public application tables** (29 report-derived, two restock-extension tables and one KL holiday coverage table), **1 external Auth table**, **1 computed view**, and **0 PostgreSQL enum types**. Section 3 has **24 controlled-value domains**, including restock status, holiday provider and state, implemented as text CHECK constraints. Pending-action indicators are derived on app open/refresh or explicit state requests, not scheduled reminder rows.
 
 ## 5. Final columns, keys and constraints
 
@@ -236,6 +242,8 @@ UNIQUE (`bread_category_id`, `ingredient_id`). This is the category/ingredient j
 | `remaining_quantity_grams` | `numeric(14,3)` | NOT NULL | CHECK `>= 0` and `<= initial_quantity_grams` |
 | `unit_cost` | `numeric(12,2)` | NOT NULL | CHECK `unit_cost >= 0`; immutable receipt cost snapshot per kilogram |
 | `source` | `text` | NULL | If present, CHECK non-blank |
+| `restock_request_item_id` | `uuid` | NULL | Optional linked receipt; composite FK with `ingredient_id` to `restock_request_items` |
+| `restock_receipt_key` | `uuid` | NULL | UNIQUE retry key; present exactly when request-item link is present |
 | `status` | `text` | NOT NULL; default `ACTIVE` | CHECK `ACTIVE`, `DEPLETED`, `EXPIRED`, `DISCARDED` |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
@@ -263,6 +271,30 @@ Valid batches must be `ACTIVE`, received by the production date and not expired 
 
 `PRODUCTION_DEDUCTION` and `PRODUCTION_REVERSAL` require a non-null `production_decision_id`. Deduction values are negative; reversal/restock values are positive. `operation_id` groups multiple batch movements without creating a run table.
 
+#### `restock_requests` (user-requested extension)
+
+| Column | Type | Contract |
+|---|---|---|
+| `id` | `uuid` | PK |
+| `production_date` | `date` | Required target date; one active request/date via partial unique index |
+| `requester_user_id` | `uuid` | Required FK to active manager profile at submission |
+| `desired_quantities` | `jsonb` | Server-calculated category/quantity snapshot; no client authority |
+| `status` | `text` | `PENDING`, `PARTIALLY_RECEIVED`, `FULFILLED`, `CANCELLED`, `CLOSED` |
+| `cancellation_reason` | `text` | Required when cancelling outstanding quantities |
+| `created_at`, `updated_at`, `closed_at` | `timestamptz` | Request lifecycle; closed timestamp only for terminal state |
+
+#### `restock_request_items` (user-requested extension)
+
+| Column | Type | Contract |
+|---|---|---|
+| `id` | `uuid` | PK |
+| `request_id` | `uuid` | Required FK to request |
+| `ingredient_id` | `uuid` | Required FK; unique with request ID |
+| `requested_grams` | `numeric(14,3)` | Positive server-calculated additional grams |
+| `cancelled_grams` | `numeric(14,3)` | Nonnegative, at most requested |
+
+`received_grams = sum(inventory_batches.initial_quantity_grams)` for linked batches; `outstanding_grams = requested_grams - received_grams - cancelled_grams`. Requested but unreceived grams never enter `inventory`, batch availability or production cost. The linked receipt uses the existing batch/snapshot/movement/audit transaction once; status changes do not add stock.
+
 ### 5.3 Context, sales history and ML governance
 
 #### `weather_records`
@@ -277,6 +309,8 @@ Valid batches must be `ACTIVE`, received by the production date and not expired 
 | `humidity_pct` | `numeric(5,2)` | NULL | CHECK NULL or `0 <= humidity_pct <= 100` |
 | `fetched_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
+These rows store the forecast available for a target date. They are not measured weather observations for historical model input; historical factors come from the linked prediction snapshot.
+
 #### `calendar_events`
 
 | Column | PostgreSQL type | Null/default | Key and constraints |
@@ -287,8 +321,28 @@ Valid batches must be `ACTIVE`, received by the production date and not expired 
 | `event_name` | `text` | NOT NULL | CHECK non-blank; part of UNIQUE |
 | `demand_multiplier` | `numeric(6,3)` | NULL | CHECK NULL or `demand_multiplier > 0` |
 | `fetched_at` | `timestamptz` | NOT NULL; default `now()` | — |
+| `source_reference` | `text` | NULL | Source retained for legacy or published events |
+| `provider` | `text` | NULL | `MALAYSIA_HOLIDAY_API` for synchronised KUL entries; NULL for legacy events |
+| `state_code` | `text` | NULL | `KUL` for provider entries |
+| `provider_source_reference` | `text` | NULL | Published HTTPS source for provider entries |
+| `subject_to_change` | `boolean` | NULL | Provider metadata for published entries |
+| `is_current` | `boolean` | NOT NULL; default `false` | Future prediction selection excludes retired/legacy entries |
 
 UNIQUE (`event_date`, `event_type`, `event_name`) permits multiple named events of the same type/date without duplication.
+
+#### `kl_holiday_syncs` (2026-11-12 extension)
+
+| Column | PostgreSQL type | Null/default | Key and constraints |
+|---|---|---|---|
+| `holiday_year` | `integer` | NOT NULL | PK; 2000–2100 |
+| `state_code` | `text` | NOT NULL; default `KUL` | CHECK `KUL` |
+| `provider` | `text` | NOT NULL; default `MALAYSIA_HOLIDAY_API` | CHECK provider |
+| `provider_source_reference` | `text` | NOT NULL | Successful year source |
+| `published_event_count` | `integer` | NOT NULL | Positive count for complete year response |
+| `last_successful_at` | `timestamptz` | NOT NULL | Last completed sync |
+| `refresh_after` | `timestamptz` | NOT NULL | Next request-driven refresh due |
+
+The sync RPC locks the year and prediction writes, upserts current published events, retires corrected provider rows from future context and preserves old rows and prediction links. Failed or incomplete fetches leave coverage unchanged. No background schedule is introduced.
 
 #### `daily_sales_records`
 
@@ -713,6 +767,9 @@ Entity type/ID must be both NULL or both non-null. Logs are append-only through 
 | `daily_results` | `waste_records` | `1 → 0..*` waste allocations | exactly `1` result | NOT NULL FK |
 | `notifications` | `notification_deliveries` | `1 → 0..*` device/skip rows | exactly `1` notification | NOT NULL FK |
 | `fcm_tokens` | `notification_deliveries` | `1 → 0..*` delivery rows | `0..1` token | Nullable FK + status CHECK |
+| `user_profiles` | `restock_requests` | `1 → 0..*` requests | exactly `1` requester | NOT NULL FK; manager at submission |
+| `restock_requests` | `restock_request_items` | `1 → 1..*` shortage items | exactly `1` request | NOT NULL FK; unique request/ingredient |
+| `restock_request_items` | `inventory_batches` | `1 → 0..*` linked physical receipts | `0..1` request item | Composite FK includes ingredient; retry key unique |
 
 `bakery_settings`, `calendar_events`, `charity_partners`, `notifications` and `system_logs` may be roots in particular workflows. `operation_id` groups inventory movements but is not an entity and creates no ER relationship.
 
@@ -730,10 +787,13 @@ PK and UNIQUE constraints create implicit unique indexes. The following addition
 | `ingredients` | PK; UNIQUE (`name`); `idx_ingredients_active(is_active, name)` |
 | `recipes` | PK; UNIQUE (`bread_category_id`, `ingredient_id`); `idx_recipes_ingredient(ingredient_id)` |
 | `inventory` | PK; UNIQUE (`ingredient_id`) |
-| `inventory_batches` | PK; `idx_inventory_batches_fefo(ingredient_id, expiry_date, received_date, id) WHERE status = 'ACTIVE'`; `idx_inventory_batches_expiry(status, expiry_date)` |
+| `inventory_batches` | PK; `idx_inventory_batches_fefo(ingredient_id, expiry_date, received_date, id) WHERE status = 'ACTIVE'`; `idx_inventory_batches_expiry(status, expiry_date)`; UNIQUE nullable `restock_receipt_key`; partial `inventory_batches_restock_item(restock_request_item_id)` |
 | `inventory_log` | PK; `idx_inventory_log_operation(operation_id)`; `idx_inventory_log_inventory_date(inventory_id, effective_date)`; `idx_inventory_log_batch(batch_id)`; `idx_inventory_log_decision(production_decision_id)` |
+| `restock_requests` | PK; partial UNIQUE (`production_date`) WHERE status is PENDING/PARTIALLY_RECEIVED; `restock_requests_status_date` |
+| `restock_request_items` | PK; UNIQUE (`request_id`, `ingredient_id`); UNIQUE (`id`, `ingredient_id`); `restock_items_request` |
 | `weather_records` | PK; UNIQUE (`weather_date`)—no redundant second date index |
-| `calendar_events` | PK; UNIQUE (`event_date`, `event_type`, `event_name`); `idx_calendar_events_date(event_date)` |
+| `calendar_events` | PK; UNIQUE (`event_date`, `event_type`, `event_name`); `idx_calendar_events_date(event_date)`; `calendar_current_date_idx(event_date) WHERE is_current` |
+| `kl_holiday_syncs` | PK (`holiday_year`); successful KUL year coverage |
 | `daily_sales_records` | PK; UNIQUE (`sales_date`, `bread_category_id`, `data_origin`); `idx_daily_sales_history(bread_category_id, sales_date, data_origin)`; partial UNIQUE source-result index; partial UNIQUE external-source index |
 | `ml_model_versions` | PK; UNIQUE (`bread_category_id`, `version`); partial UNIQUE (`bread_category_id`) WHERE `lifecycle_status = 'ACTIVE'`; `idx_model_versions_category_status(bread_category_id, lifecycle_status)` |
 | `model_evaluations` | PK; `idx_model_evaluations_version_time(model_version_id, evaluated_at DESC)` |
@@ -789,6 +849,7 @@ Generated/stored calculation columns use PostgreSQL generation expressions, not 
 |---|---|---|---|
 | `user_profiles`, settings and catalogue | Enabled | None | Node administration/profile Services through Repos/RPCs |
 | Inventory and recipes | Enabled | None | Node Inventory/Recommendation Services through Repos/RPCs |
+| Restock requests/items and linked batches | Enabled | None | Node Restock/InventoryAdmin Services through manager submission and administrator receipt/cancellation RPCs |
 | Context caches | Enabled | None | Node `ContextService` through Repos |
 | Sales history, prediction and ML metadata | Enabled | None | Node prediction/model Services; FastAPI returns DTOs only |
 | Production, POS, donation and waste | Enabled | None | Node transactional Services/RPCs |
@@ -813,6 +874,8 @@ The narrowly granted read-only helper reads only the current `auth.uid()` profil
 ### 8.3 RPC permissions
 
 Transaction functions are not callable by Flutter or FastAPI. Revoke execution from `PUBLIC`, `anon` and `authenticated`; grant only to the protected Node server database role. Functions validate the supplied actor against `user_profiles.account_status = 'ACTIVE'` and the required role before mutation, and write an audit event.
+
+The staged restock functions are `restock_plan_snapshot`, `submit_restock_request`, `receive_restock_batch` and `cancel_restock_outstanding`. Submission shares inventory-master then production-date locks with confirmation/POS, verifies the current server plan and inserts no stock. Linked receipt takes the inventory-master lock, then locks its request before calling the existing audited batch receipt once; a unique receipt key makes an identical retry idempotent. Cancellation takes the same locks, records a reason and changes only outstanding request quantities. All writes and their audit event commit or roll back together.
 
 The `sales_by_timeslot` view uses security-invoker behaviour and remains accessible only through Node's authorized reporting path.
 
@@ -1007,6 +1070,8 @@ erDiagram
         numeric remaining_quantity_grams
         numeric unit_cost
         text source
+        uuid restock_request_item_id FK
+        uuid restock_receipt_key UK
         text status
         timestamptz created_at
     }
@@ -1021,6 +1086,26 @@ erDiagram
         text reason
         date effective_date
         timestamptz created_at
+    }
+
+    RESTOCK_REQUESTS {
+        uuid id PK
+        date production_date
+        uuid requester_user_id FK
+        jsonb desired_quantities
+        text status
+        text cancellation_reason
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz closed_at
+    }
+
+    RESTOCK_REQUEST_ITEMS {
+        uuid id PK
+        uuid request_id FK
+        uuid ingredient_id FK
+        numeric requested_grams
+        numeric cancelled_grams
     }
 
     WEATHER_RECORDS {
@@ -1282,6 +1367,10 @@ erDiagram
     INGREDIENTS ||--o{ INVENTORY_BATCHES : has_batches
     INVENTORY ||--o{ INVENTORY_LOG : records
     INVENTORY_BATCHES ||--o{ INVENTORY_LOG : moved_in
+    USER_PROFILES ||--o{ RESTOCK_REQUESTS : requests
+    RESTOCK_REQUESTS ||--o{ RESTOCK_REQUEST_ITEMS : needs
+    INGREDIENTS ||--o{ RESTOCK_REQUEST_ITEMS : requested_for
+    RESTOCK_REQUEST_ITEMS o|--o{ INVENTORY_BATCHES : fulfilled_by
     PRODUCTION_DECISIONS o|--o{ INVENTORY_LOG : causes
 
     BREAD_CATEGORIES ||--o{ DAILY_SALES_RECORDS : has_history

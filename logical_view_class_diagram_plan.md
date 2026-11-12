@@ -8,9 +8,9 @@ The earlier planning audit, associated with the July 2026 planning set, found on
 
 Earlier catalogues described route objects as Controllers, Python Supabase Repos, scheduled reminder classes, direct client CRUD and automatic donation. Those obsolete proposals have been removed from active diagram instructions. Git history retains the old snapshot. `FYP Report.md` was the earlier report reference and is now user-deleted; no link or implementation instruction depends on it.
 
-## Current source review: 2026-10-11
+## Historical source review: 2026-10-11
 
-The repository remains a Flutter starter plus plans. The current `lib/main.dart` defines the counter-demo MyApp, MyHomePage and private state; none is a bakery domain class. Planning code fences are not implemented files. No application/backend/database/ML tests were executed for this Markdown reconciliation.
+At that date the repository was a Flutter starter plus plans. The current repository has local backend, Flutter and ML code and staged SQL migrations; no live restock migration result is claimed. Planning code fences are design examples unless a real file is linked. No application/backend/database/ML tests were executed for the October Markdown reconciliation.
 
 Use the latest RSW_SooKinMin_Project1 DOCX as report authority and [its repository Markdown mirror](RSW_SooKinMin_Project1.docx.md) for navigation. [logical_view_canonical_design.md](logical_view_canonical_design.md) supplies the reconciled proposed classifier catalogue. Current diagrams must be labelled **Proposed Logical View** until implementation inspection can verify classes and relationships.
 
@@ -37,6 +37,7 @@ The platform exception diagram must show Supabase Authentication, foreground rec
 8. Trace ReportService/ReportRepo/ReportExportAdapter for common CSV/PDF/UI calculations, simulation labels, FEFO cost snapshots, signed error/profit and Not Applicable percentages.
 9. Show manager-confirmed donation/waste and dedicated status updates; cancellation/reallocation semantics remain an open decision, not an invented transition policy.
 10. Once actual implementation exists, compare declarations, signatures, dependency injection, FK constraints and real tests to these diagrams. Until then record checks as design review/planned validation rather than implementation verification.
+11. For the 2026-11-11 restock extension, show manager preview/request separately from administrator review/linked batch receipt/cancellation. Add RestockRequest → RestockRequestItem → optional linked InventoryBatch associations; each linked batch's ingredient must match its item. Do not draw pending requested grams as inventory stock or a second stock-increment path. See [the extension diagram](logical_view_canonical_design.md#7-restock-extension-logical-view---2026-11-11).
 
 ## Review output and unresolved design work
 

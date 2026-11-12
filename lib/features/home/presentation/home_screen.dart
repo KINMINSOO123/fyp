@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/theme/bakery_theme.dart';
+import '../../../core/theme/bakery_widgets.dart';
 
 import '../../auth/application/session_controller.dart';
 import '../../profile/domain/user_profile.dart';
@@ -8,6 +10,7 @@ import '../../prediction/presentation/prediction_screen.dart';
 import '../../model_management/presentation/model_list_screen.dart';
 import '../../inventory/presentation/production_planning_screen.dart';
 import '../../inventory/presentation/inventory_admin_screen.dart';
+import '../../inventory/presentation/restock_admin_screen.dart';
 import '../../user_administration/presentation/user_list_screen.dart';
 import '../../pos_simulation/presentation/pos_simulation_screen.dart';
 import '../../leftovers/presentation/leftover_management_screen.dart';
@@ -36,6 +39,44 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   RealtimeChannel? _notificationChannel;
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    return parts.take(2).map((part) => part[0].toUpperCase()).join();
+  }
+
+  Future<void> _openPage(Widget page) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+
+  Future<void> _signOut() async {
+    final channel = _notificationChannel;
+    if (channel != null) {
+      await Supabase.instance.client.removeChannel(channel);
+      _notificationChannel = null;
+    }
+    await PushRegistrationManager.instance.stop();
+    await widget.sessionController.signOut();
+  }
+
+  void _openNavigation(int index) {
+    if (index == 0) return;
+    final manager = widget.profile.role == UserRole.bakeryManager;
+    final page = manager
+        ? switch (index) {
+            1 => const ProductionPlanningScreen(),
+            2 => const PosSimulationScreen(role: UserRole.bakeryManager),
+            3 => const LeftoverManagementScreen(role: UserRole.bakeryManager),
+            _ => const ReportsScreen(),
+          }
+        : switch (index) {
+            1 => const InventoryAdminScreen(),
+            2 => const ModelListScreen(),
+            3 => const ReportsScreen(),
+            _ => const SettingsScreen(),
+          };
+    _openPage(page);
+  }
 
   @override
   void initState() {
@@ -94,66 +135,145 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Smart Bakery'),
+        title: Row(
+          children: [
+            const Icon(Icons.bakery_dining, size: 22),
+            const SizedBox(width: 9),
+            Text(
+              profile.role == UserRole.bakeryManager
+                  ? 'Smart Bakery'
+                  : 'Smart Bakery Admin',
+            ),
+          ],
+        ),
         actions: [
           IconButton(
+            tooltip: 'Notifications',
+            onPressed: _openNotifications,
+            icon: const Icon(Icons.notifications_outlined),
+          ),
+          IconButton(
+            tooltip: 'Profile',
+            onPressed: () =>
+                _openPage(ProfileScreen(sessionController: sessionController)),
+            icon: CircleAvatar(
+              radius: 15,
+              backgroundColor: BakeryColors.accent,
+              child: Text(
+                _initials(profile.fullName),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: BakeryColors.primary,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
             tooltip: 'Log out',
-            onPressed: isSigningOut
-                ? null
-                : () async {
-                    final channel = _notificationChannel;
-                    if (channel != null) {
-                      await Supabase.instance.client.removeChannel(channel);
-                      _notificationChannel = null;
-                    }
-                    await PushRegistrationManager.instance.stop();
-                    await sessionController.signOut();
-                  },
+            onPressed: isSigningOut ? null : _signOut,
             icon: const Icon(Icons.logout),
           ),
         ],
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
             Text(
               'Welcome, ${profile.fullName}',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
-            const SizedBox(height: 8),
-            Text(roleLabel),
-            const SizedBox(height: 24),
+            const SizedBox(height: 4),
+            Text(roleLabel, style: Theme.of(context).textTheme.bodyMedium),
+            const BakerySectionHeader('Pending actions'),
             const PendingActionsPanel(),
-            const SizedBox(height: 16),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.notifications_outlined),
-                title: const Text('Notifications'),
-                subtitle: const Text(
-                  'Review your alerts and delivery preferences.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await _openNotifications();
-                },
-              ),
+            const BakerySectionHeader('Quick actions'),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final manager = profile.role == UserRole.bakeryManager;
+                final actions = manager
+                    ? <(IconData, String, Widget)>[
+                        (
+                          Icons.auto_graph,
+                          'Predictions',
+                          PredictionScreen(role: profile.role),
+                        ),
+                        (
+                          Icons.event_note,
+                          'Production plan',
+                          const ProductionPlanningScreen(),
+                        ),
+                        (
+                          Icons.play_circle_outline,
+                          'POS simulation',
+                          PosSimulationScreen(role: profile.role),
+                        ),
+                        (
+                          Icons.recycling,
+                          'Leftovers',
+                          LeftoverManagementScreen(role: profile.role),
+                        ),
+                      ]
+                    : <(IconData, String, Widget)>[
+                        (
+                          Icons.inventory_2_outlined,
+                          'Inventory',
+                          const InventoryAdminScreen(),
+                        ),
+                        (
+                          Icons.local_shipping_outlined,
+                          'Restock',
+                          const RestockAdminScreen(),
+                        ),
+                        (
+                          Icons.model_training,
+                          'Models',
+                          const ModelListScreen(),
+                        ),
+                        (
+                          Icons.manage_accounts,
+                          'Users',
+                          const UserListScreen(),
+                        ),
+                        (
+                          Icons.settings_outlined,
+                          'Settings',
+                          const SettingsScreen(),
+                        ),
+                      ];
+                final width = (constraints.maxWidth - 8) / 2;
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    for (final action in actions)
+                      SizedBox(
+                        width: width,
+                        child: BakeryQuickAction(
+                          icon: action.$1,
+                          label: action.$2,
+                          onTap: () => _openPage(action.$3),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            const BakerySectionHeader('Your account'),
+            BakeryActionCard(
+              icon: Icons.notifications_outlined,
+              title: 'Notifications',
+              subtitle: 'Review your alerts and delivery preferences.',
+              onTap: _openNotifications,
             ),
             const SizedBox(height: 16),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.person_outline),
-                title: const Text('Profile'),
-                subtitle: Text('${profile.fullName}\n$roleLabel'),
-                isThreeLine: true,
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          ProfileScreen(sessionController: sessionController),
-                    ),
-                  );
-                },
+            BakeryActionCard(
+              icon: Icons.person_outline,
+              title: 'Profile',
+              subtitle: '${profile.fullName} · $roleLabel',
+              onTap: () => _openPage(
+                ProfileScreen(sessionController: sessionController),
               ),
             ),
             const SizedBox(height: 16),
@@ -177,6 +297,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             const SizedBox(height: 16),
             if (profile.role == UserRole.systemAdministrator) ...[
+              const BakerySectionHeader('Administration'),
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.settings_outlined),
@@ -196,9 +317,10 @@ class _HomeScreenState extends State<HomeScreen> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.event_outlined),
-                  title: const Text('Calendar Events'),
+                  title: const Text('KL Public Holidays'),
                   subtitle: const Text(
-                    'Record sourced holidays and local events for predictions.'),
+                    'View KL holidays and refresh published calendar data.',
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -244,6 +366,20 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 16),
               Card(
                 child: ListTile(
+                  leading: const Icon(Icons.local_shipping_outlined),
+                  title: const Text('Restock Requests'),
+                  subtitle: const Text('Review shortages and receive batches.'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const RestockAdminScreen(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
                   leading: const Icon(Icons.model_training),
                   title: const Text('Model Management'),
                   subtitle: const Text(
@@ -261,6 +397,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 16),
             ],
+            const BakerySectionHeader('Bakery operations'),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.auto_graph),
@@ -385,6 +522,57 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ],
         ),
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: 0,
+        onDestinationSelected: _openNavigation,
+        destinations: profile.role == UserRole.bakeryManager
+            ? const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home),
+                  label: 'Home',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.event_note_outlined),
+                  label: 'Plan',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.play_circle_outline),
+                  label: 'Simulate',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.recycling_outlined),
+                  label: 'Leftovers',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.bar_chart_outlined),
+                  label: 'Reports',
+                ),
+              ]
+            : const [
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home),
+                  label: 'Home',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.inventory_2_outlined),
+                  label: 'Inventory',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.model_training_outlined),
+                  label: 'Models',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.bar_chart_outlined),
+                  label: 'Reports',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.settings_outlined),
+                  label: 'Settings',
+                ),
+              ],
       ),
     );
   }

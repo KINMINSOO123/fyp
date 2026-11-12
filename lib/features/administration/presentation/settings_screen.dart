@@ -1,9 +1,8 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/administration_service.dart';
+import 'prediction_rules_form.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({this.gateway, super.key});
@@ -20,7 +19,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _closes = TextEditingController();
   final _timezone = TextEditingController();
   final _threshold = TextEditingController();
-  final _contextRules = TextEditingController();
+  Map<String, dynamic>? _contextRules;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -43,7 +42,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _closes.dispose();
     _timezone.dispose();
     _threshold.dispose();
-    _contextRules.dispose();
     if (widget.gateway == null) (_gateway as AdministrationService).close();
     super.dispose();
   }
@@ -84,9 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _threshold.text =
             byKey['prediction.low_confidence_threshold']?.toString() ?? '';
         final rules = byKey['prediction.context_rules'];
-        _contextRules.text = rules == null
-            ? ''
-            : const JsonEncoder.withIndent('  ').convert(rules);
+        _contextRules = rules is Map<String, dynamic> ? rules : null;
       });
       try {
         final status = await _gateway.serviceStatus();
@@ -148,11 +144,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _gateway.saveSetting('prediction.low_confidence_threshold', value);
   });
 
-  Future<void> _saveContext() => _save(() async {
-    final value = jsonDecode(_contextRules.text);
-    if (value is! Map<String, dynamic>) {
-      throw const FormatException('Prediction rules must be a JSON object.');
-    }
+  Future<void> _saveContext(Map<String, dynamic> value) => _save(() async {
     await _gateway.saveSetting('prediction.context_rules', value);
   });
 
@@ -232,36 +224,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const Text(
-            'Each active category needs a base quantity keyed by its UUID. '
-            'Weather and calendar fallbacks are explicitly labelled in predictions.',
-          ),
-          ExpansionTile(
-            title: Text('Active categories (${_activeCategories.length})'),
-            children: [
-              for (final category in _activeCategories)
-                ListTile(
-                  title: Text(category['name']?.toString() ?? 'Category'),
-                  subtitle: SelectableText(category['id']?.toString() ?? ''),
-                ),
-            ],
+            'Demand adjustments are stored with the bakery prediction rules. '
+            'Weather and calendar fallbacks are labelled in saved predictions.',
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _contextRules,
-            enabled: !_saving && !_loading,
-            minLines: 12,
-            maxLines: 20,
-            keyboardType: TextInputType.multiline,
-            decoration: const InputDecoration(
-              labelText: 'Prediction rules (JSON)',
-              border: OutlineInputBorder(),
+          if (_contextRules == null)
+            const Text('Prediction rules are unavailable.')
+          else
+            PredictionRulesForm(
+              rules: _contextRules!,
+              activeCategories: _activeCategories,
+              busy: _saving || _loading,
+              onSave: _saveContext,
             ),
-          ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: _saving || _loading ? null : _saveContext,
-            child: const Text('Save prediction rules'),
-          ),
           const Divider(height: 36),
           Text('Service status', style: Theme.of(context).textTheme.titleLarge),
           const Text(

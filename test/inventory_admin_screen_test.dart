@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyp/features/inventory/data/inventory_admin_service.dart';
+import 'package:fyp/features/inventory/data/restock_service.dart';
 import 'package:fyp/features/inventory/presentation/inventory_admin_screen.dart';
+import 'package:fyp/features/inventory/presentation/restock_admin_screen.dart';
 
 class FakeInventoryAdminGateway implements InventoryAdminGateway {
   @override
@@ -64,6 +66,42 @@ class FakeInventoryAdminGateway implements InventoryAdminGateway {
   ) async {}
 }
 
+class FakeRestockGateway implements RestockGateway {
+  @override
+  Future<RestockPreview> preview(String date) async => const RestockPreview(
+    targetDate: '2026-11-13',
+    desiredQuantities: [],
+    shortages: [],
+  );
+  @override
+  Future<Map<String, dynamic>> submit(RestockPreview preview) async => {};
+  @override
+  Future<List<Map<String, dynamic>>> list({
+    required bool administrator,
+  }) async => [
+    {
+      'id': 'request',
+      'productionDate': '2026-11-13',
+      'requesterUserId': 'manager',
+      'status': 'PENDING',
+      'cancellationReason': null,
+      'items': [
+        {
+          'id': 'item',
+          'ingredientId': 'ingredient',
+          'ingredientName': 'Flour',
+          'requestedGrams': 500,
+          'receivedGrams': 0,
+          'cancelledGrams': 0,
+          'outstandingGrams': 500,
+        },
+      ],
+    },
+  ];
+  @override
+  Future<void> cancel(String requestId, String reason) async {}
+}
+
 void main() {
   testWidgets(
     'T-INV-UI-01 [FR-INV-01, FR-INV-02]: admin catalogue and stock panels render',
@@ -83,4 +121,62 @@ void main() {
       expect(find.textContaining('2026-11-10'), findsOneWidget);
     },
   );
+
+  testWidgets('T-INV-UI-02 [FR-INV-02]: batch receipt cost remains editable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: InventoryAdminScreen(gateway: FakeInventoryAdminGateway()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Batches'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Receive batch'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Batch cost (MYR/kg)'),
+      '4.50',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('4.50'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('T-RST-UI-01 [EXT-RST-04]: linked batch cost remains editable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RestockAdminScreen(
+          restockGateway: FakeRestockGateway(),
+          inventoryGateway: FakeInventoryAdminGateway(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Receive Batch'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextField, 'Batch cost (MYR/kg)'));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Batch cost (MYR/kg)'),
+      '4.50',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('4.50'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }

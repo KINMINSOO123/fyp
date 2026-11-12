@@ -64,3 +64,7 @@ Record measured timings, device/network/dataset conditions and actual UAT partic
 6. Record actual evidence and unresolved defects without rewriting plans as completed results.
 
 See the [detailed test plan](README.md) and [traceability/change report](../../planning_documents_change_report.md). The October reconciliation was a Markdown-only audit; this November update records later local application work without claiming live deployment or completed UAT.
+
+# Restock extension verification (2026-11-11)
+
+Module 6 also tracks `EXT-RST-01`–`EXT-RST-06`: joint desired-quantity shortage preview, duplicate active request rejection, cross-role permissions, linked partial receipts with one stock increment, audited cancellation and refreshed planning. Local Node/Flutter checks and pending isolated PostgreSQL cases are listed in the [detailed testing plan](README.md#restock-extension-checks-2026-11-11-user-request). No live migration, device UAT or report Chapter 5 result is inferred from that checklist.

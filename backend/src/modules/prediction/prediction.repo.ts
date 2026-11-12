@@ -118,6 +118,7 @@ export class PredictionRepo {
         .select("id, condition").eq("weather_date", targetDate).maybeSingle(),
       supabaseAdmin.from("calendar_events")
         .select("id, event_type").eq("event_date", targetDate)
+        .eq("is_current", true)
         .order("id", { ascending: true }),
     ]);
     if (settings.error || weather.error || events.error ||

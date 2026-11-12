@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fyp/features/inventory/data/recommendation_service.dart';
+import 'package:fyp/features/inventory/data/restock_service.dart';
 import 'package:fyp/features/inventory/domain/recommendation_plan.dart';
 import 'package:fyp/features/inventory/presentation/production_planning_screen.dart';
 import 'package:fyp/features/prediction/data/prediction_service.dart';
@@ -44,6 +45,8 @@ Map<String, dynamic> planJson({
 };
 
 class FakePredictionGateway implements PredictionGateway {
+  @override
+  Future<List<DailyPrediction>> getByDate(String date) async => [];
   @override
   Future<NextPredictionState> getNextDayState() async => NextPredictionState(
     targetDate: date,
@@ -90,6 +93,55 @@ class FakeRecommendationGateway implements RecommendationGateway {
   }
 }
 
+class FakeRestockGateway implements RestockGateway {
+  FakeRestockGateway({this.shortage = false});
+  final bool shortage;
+  int submissions = 0;
+  @override
+  Future<RestockPreview> preview(String targetDate) async => RestockPreview(
+    targetDate: targetDate,
+    desiredQuantities: const [
+      {
+        'breadCategoryId': 'category-1',
+        'breadCategoryName': 'Wholemeal Bread',
+        'desiredQty': 6,
+        'basis': 'PREDICTION',
+      },
+    ],
+    shortages: shortage
+        ? const [
+            {
+              'ingredientId': 'flour',
+              'ingredientName': 'Flour',
+              'requiredGrams': 600,
+              'availableGrams': 400,
+              'additionalGrams': 200,
+            },
+          ]
+        : const [],
+  );
+  @override
+  Future<Map<String, dynamic>> submit(RestockPreview preview) async {
+    submissions++;
+    return {
+      'id': 'request',
+      'productionDate': preview.targetDate,
+      'status': 'PENDING',
+    };
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> list({
+    required bool administrator,
+  }) async => submissions > 0
+      ? [
+          {'productionDate': date, 'status': 'PENDING'},
+        ]
+      : [];
+  @override
+  Future<void> cancel(String requestId, String reason) async {}
+}
+
 void main() {
   test(
     'T-INV-UI-01 [FR-INV-07]: shortage plan keeps recommendation unavailable',
@@ -112,6 +164,7 @@ void main() {
           home: ProductionPlanningScreen(
             gateway: fake,
             predictionGateway: FakePredictionGateway(),
+            restockGateway: FakeRestockGateway(),
           ),
         ),
       );
@@ -137,17 +190,26 @@ void main() {
       final fake = FakeRecommendationGateway(
         RecommendationPlan.fromJson(planJson(shortage: true)),
       );
+      final restock = FakeRestockGateway(shortage: true);
       await tester.pumpWidget(
         MaterialApp(
           home: ProductionPlanningScreen(
             gateway: fake,
             predictionGateway: FakePredictionGateway(),
+            restockGateway: restock,
           ),
         ),
       );
       await tester.pumpAndSettle();
       expect(find.textContaining('200.000 g short'), findsOneWidget);
       expect(find.text('Confirm Production'), findsNothing);
+      expect(find.text('Request Restock'), findsOneWidget);
+      await tester.tap(find.text('Request Restock'));
+      await tester.pumpAndSettle();
+      expect(find.text('Production date: $date'), findsOneWidget);
+      await tester.tap(find.text('Confirm Request'));
+      await tester.pumpAndSettle();
+      expect(restock.submissions, 1);
     },
   );
 }
