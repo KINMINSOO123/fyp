@@ -29,7 +29,7 @@ function row(
   };
 }
 
-test("T-DP-HIST-01 [FR-DP-01, BR-DP-03]: selects origin priority regardless of input order", () => {
+test("T-DP-HIST-01 [FR-DP-01, BR-DP-03]: selects real origin priority and excludes simulated sales", () => {
   const result = selector.selectForCategory([
     row("simulation", "2026-11-01", "SIMULATION_GENERATED", 8),
     row("imported", "2026-11-01", "IMPORTED_HISTORICAL", 9),
@@ -37,10 +37,13 @@ test("T-DP-HIST-01 [FR-DP-01, BR-DP-03]: selects origin priority regardless of i
     row("later", "2026-11-02", "SIMULATION_GENERATED", 12),
   ], categoryId, targetDate);
 
-  assert.equal(result.distinctDayCount, 2);
-  assert.deepEqual(result.observations.map((item) => item.id), ["actual", "later"]);
-  assert.deepEqual(result.observations.map((item) => item.unitsSold), [0, 12]);
+  assert.equal(result.distinctDayCount, 1);
+  assert.deepEqual(result.observations.map((item) => item.id), ["actual"]);
+  assert.deepEqual(result.observations.map((item) => item.unitsSold), [0]);
   assert.equal(result.observations[0]?.dataOrigin, "ACTUAL_TRANSACTION");
+  assert.deepEqual(result.rejected.filter((item) =>
+    item.reason === "SIMULATION_EXCLUDED").map((item) => item.id),
+    ["simulation", "later"]);
 });
 
 test("T-DP-HIST-02 [FR-DP-01]: invalid actual does not suppress valid imported history", () => {
@@ -93,6 +96,18 @@ test("T-DP-HIST-05 [BR-DP-03, BR-DP-04]: counts distinct days including zero sal
   const result = selector.selectForCategory(rows, categoryId, targetDate);
   assert.equal(result.distinctDayCount, 30);
   assert.equal(result.observations.every((item) => item.unitsSold === 0), true);
+});
+
+test("T-DP-HIST-08 [FR-DP-01, NFR-ACC-05]: simulated-only days never satisfy the training threshold", () => {
+  const rows = Array.from({ length: 30 }, (_, index) => {
+    const day = String(index + 1).padStart(2, "0");
+    return row(`sim-${day}`, `2026-10-${day}`,
+      "SIMULATION_GENERATED", 20);
+  });
+  const result = selector.selectForCategory(rows, categoryId, targetDate);
+  assert.equal(result.distinctDayCount, 0);
+  assert.equal(result.rejected.every((item) =>
+    item.reason === "SIMULATION_EXCLUDED"), true);
 });
 
 test("T-DP-HIST-06 [FR-DP-01]: rejects category and date mismatch", () => {

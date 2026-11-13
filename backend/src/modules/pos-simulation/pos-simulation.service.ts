@@ -1,6 +1,8 @@
 import { AppError } from "../../shared/AppError.js";
 import { isCalendarDate } from "../prediction/history-selection.service.js";
 import type { PosSimulationRepo } from "./pos-simulation.repo.js";
+import { CurrentWeatherClient } from "./current-weather.client.js";
+import type { CurrentWeather } from "./current-weather.client.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type DataRepo = Pick<PosSimulationRepo,
@@ -16,7 +18,9 @@ function bakeryDate(now: Date, timezone: string): string {
 
 export class PosSimulationService {
   constructor(private readonly providedRepo?: DataRepo,
-    private readonly now: () => Date = () => new Date()) {}
+    private readonly now: () => Date = () => new Date(),
+    private readonly weather: Pick<CurrentWeatherClient, "get"> =
+      new CurrentWeatherClient()) {}
 
   private async repo(): Promise<DataRepo> {
     return this.providedRepo ?? new (
@@ -42,11 +46,17 @@ export class PosSimulationService {
     const repo = await this.repo();
     const today = bakeryDate(this.now(), await repo.getBakeryTimezone());
     const date = typeof request.date === "string" ? request.date : today;
-    if (date > today) {
-      throw new AppError(400, "VALIDATION_ERROR",
-        "Official simulation cannot run for a future date.");
+    if (date !== today) {
+      throw new AppError(409, "CURRENT_WEATHER_TODAY_ONLY",
+        "Current-weather simulation can run only for today's bakery date. Past and future dates need a separately labelled scenario.");
     }
-    return repo.complete(actorUserId, date);
+    // Resolve one observation before entering the atomic database operation.
+    const resolvedWeather: CurrentWeather = await this.weather.get();
+    if (bakeryDate(this.now(), await repo.getBakeryTimezone()) !== date) {
+      throw new AppError(409, "CURRENT_WEATHER_TODAY_ONLY",
+        "The bakery date changed while fetching weather. Refresh and retry.");
+    }
+    return repo.complete(actorUserId, date, resolvedWeather);
   }
 
   async getResult(date: string) {

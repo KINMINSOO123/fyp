@@ -21,13 +21,13 @@ The detailed field dictionary, keys and ERD are in [database_canonical_design.md
 | Access/configuration | `user_profiles`, `bakery_settings`, `system_settings` | 3 |
 | Catalogue/inventory/restock | `bread_categories`, `ingredients`, `recipes`, `inventory`, `inventory_batches`, `inventory_log`, `restock_requests`, `restock_request_items` | 8 |
 | Context/history/models/prediction | `weather_records`, `calendar_events`, `kl_holiday_syncs`, `daily_sales_records`, `ml_model_versions`, `model_evaluations`, `feature_importance`, `daily_predictions`, `prediction_calendar_events` | 9 |
-| Production/POS/surplus | `production_decisions`, `daily_production`, `daily_results`, `sales_transactions`, `charity_partners`, `donations`, `waste_records` | 7 |
+| Production/POS/surplus | `production_decisions`, `daily_production`, `daily_results`, `sales_transactions`, `simulation_baselines`, `simulation_scenarios`, `charity_partners`, `donations`, `waste_records` | 9 |
 | Notifications/audit | `notifications`, `notification_preferences`, `fcm_tokens`, `notification_deliveries`, `system_logs` | 5 |
-| **Total staged public application tables** | | **32** |
+| **Total staged public application tables** | | **34** |
 
-The report-derived baseline remains 29 tables; two restock tables and one KL holiday coverage table make the staged design 32. Additionally show **one external Supabase-managed `auth.users` table** and **one computed `sales_by_timeslot` view**. The staged schema has **zero PostgreSQL enum types**: its **24 controlled-value domains**, including restock status, holiday provider and state, use text CHECK constraints and corresponding application types. View outputs, DTOs, model artifacts, reports, recommendations, `DailyContext`, `SimulationRun` and `LeftoverRecord` are not additional base tables.
+The report-derived baseline remains 29 tables; two restock tables, one KL holiday coverage table and two independent-simulation configuration tables make the staged design 34. Additionally show **one external Supabase-managed `auth.users` table** and **one computed `sales_by_timeslot` view**. The staged schema has **zero PostgreSQL enum types**: its **27 controlled-value domains**, including restock, holiday and simulation choices, use text CHECK constraints and corresponding application types. View outputs, DTOs, model artifacts, reports, recommendations, `DailyContext`, `SimulationRun` and `LeftoverRecord` are not additional base tables.
 
-The 24 domains are user role, account status, setting data type, data origin, ingredient unit, inventory batch status, inventory movement reason, restock request status, weather condition, calendar-event type, KL holiday provider, KL holiday state, model type, model lifecycle, evaluation label, prediction mode, production option, sales time slot, donation status, notification severity, notification type, push status, audit outcome and audit severity. Their exact values are maintained in the canonical design Section 3.
+The 27 domains are user role, account status, setting data type, data origin, ingredient unit, inventory batch status, inventory movement reason, restock request status, weather condition, calendar-event type, KL holiday provider, KL holiday state, simulation baseline source, simulation method, simulation weather choice, model type, model lifecycle, evaluation label, prediction mode, production option, sales time slot, donation status, notification severity, notification type, push status, audit outcome and audit severity. Their exact values are maintained in the canonical design Section 3.
 
 ## 3. Schema and relationship verification
 
@@ -42,12 +42,12 @@ These checks are to run after implementation; all are currently **PLANNED**.
 | Batch | Positive initial grams, remainder 0..initial, expiry later than receipt, immutable unit-cost snapshot | Tables 4.16, 4.20 |
 | Restock extension | Manager FK, one active request/date, unique ingredient/request, optional batch/item link with matching ingredient and unique retry key; requested = received + cancelled + outstanding | `EXT-RST-01`–`EXT-RST-06` (2026-11-11 user extension; report update pending) |
 | Source identity | SIMULATION_GENERATED requires unique source result and validation; actual/imported require external source reference and no result link | Sections 4.5.3-4.5.4 |
-| Saved historical context | Selected simulation record's result and prediction match category/date; valid saved four factors pass to ML, absent factors default with an indicator, malformed factors fail | 2026-11-12 user change; report update pending |
+| Saved historical context | Legacy simulation record's result/prediction relationship and four factors remain verifiable, but normal ML selection excludes simulation rows; actual/imported missing context remains explicitly neutral | 2026-11-12 technical revision; report update pending |
 | KL holiday coverage | Successful KUL year coverage is separate from matching events; repeat sync does not duplicate; corrections retain old rows/links while future predictions use current events | 2026-11-12 user change; report update pending |
-| Observation uniqueness | Unique category/date/origin; one selected validated observation per category/day in actual -> imported -> simulation priority | BR-DP-03-04, Section 4.5.4 |
+| Observation uniqueness | Unique category/date/origin; normal ML selects one validated non-simulated observation per category/day, actual before imported; simulation rows remain stored for reporting | 2026-11-12 technical revision; report update pending |
 | Prediction mode | MODEL requires non-null model reference and 0..100 confidence; COLD_START requires both NULL | NFR-ACC-08, Section 4.5.3 |
 | Model governance | One ACTIVE RF version/category; candidate/evaluation/activation/restoration separate; retain history and untouched holdout provenance | FR-DP-09-12, NFR-ACC-01-05 |
-| Prediction context | Optional weather reference and prediction-calendar junction; no repeated overall context multipliers in simulation | Table 4.17, BR-POS-07 |
+| Prediction context | Optional weather reference and prediction-calendar junction; POS demand instead uses separate saved baselines and demo scenario factors | 2026-11-12 technical revision; report update pending |
 | Operational chain | Unique prediction -> decision -> production -> result links; matching category/date through composite keys or equivalent transactional checks | Tables 4.18, 4.20 |
 | Transactions/history | Every successful result has sales details and one validated SIMULATION_GENERATED history row; no incomplete commit | Section 4.5.4, FR-POS-08 |
 | Allocation normalization | Donation/waste category comes through DailyResult, not duplicated; positive quantity, active charity/disposal reason and confirming manager | Table 4.18 |
@@ -73,7 +73,7 @@ The following restock checks are **planned for an isolated database after applyi
 | DB-01 | Manager attempts master/settings/users/model mutation; administrator attempts prediction/confirmation/simulation/allocation | Cross-role requests rejected after JWT and ACTIVE-profile validation; no automatic administrator inheritance |
 | DB-02 | Invalid JWT, inactive profile, spoofed actor/role/feasibility; two concurrent final-admin removals | Reject unauthorized input; retain at least one active administrator; audit actual actor |
 | DB-03 | Insert two bakery settings; invalid role/status/settings JSON or secret field | Reject invalid rows/settings; normal singleton update succeeds |
-| DB-04 | 29 distinct valid category days plus duplicate/imported/simulation records for those days | Still 29 observations; actual wins, then imported, then simulation; invalid rows excluded |
+| DB-04 | 29 distinct valid non-simulated category days plus simulated rows for other dates | Still 29 eligible ML observations; actual wins over imported, and simulation rows do not fill missing days |
 | DB-05 | 30 selected valid days but missing/invalid active RF model | COLD_START; history average is Bc; configured base only when no valid observation exists |
 | DB-06 | COLD_START confidence 65 or model reference; MODEL null confidence/reference; confidence outside 0..100 | Reject invalid SQL/DTO combinations; cold-start UI displays heuristic Low Confidence and no percentage |
 | DB-07 | Confidence tree mean/sigma: (100,0), (100,25), (100,26), (0,0), (0,2) | Formula yields 100,75,74,100,0 respectively; MODEL below 75 is Low Confidence, equality is not; no forced 50-98 range |
@@ -86,7 +86,9 @@ The following restock checks are **planned for an isolated database after applyi
 | DB-14 | Commitments exceed stock after a stock change; concurrent confirmations | Explain ingredient shortages and reject infeasible plan; joint validation/locking prevents overspending |
 | DB-15 | Batch A received 1 Oct, expires 20 Oct; B received 2 Oct, expires 15 Oct; produce 10 Oct | Consume B first because it expires earlier; equal expiry dates use receipt date, then ID; expired/inactive/unreceived batches excluded |
 | DB-16 | Official simulation lacks stored selected-date prediction or manager confirmation | Reject; current date default, no recommended-quantity fallback or producedOverride bypass |
-| DB-17 | Known contextual prediction, simulation with weather/holiday/season factors | Use stored baseline plus time-slot/stochastic variation; do not multiply those factors again |
+| DB-17 | Change only prediction with fixed date/category/scenario/baseline, then change only production | Demand/seed stays fixed; production changes only sold/lost/leftover; stored prediction changes comparison only |
+| DB-17A | Missing baseline or expired/missing KL coverage; valid coverage with no event | Setup error for missing coverage/baseline; covered ordinary day uses non-holiday factor |
+| DB-17B | Save manual/imported average; rerun same scenario in isolated fixture; inspect prior/new results | Imported average excludes simulated and superseded imported days; deterministic variation; V1 remains labelled, V2 snapshot records source/factors/variation/seed |
 | DB-18 | Duplicate or concurrent simulation requests for same decisions | One completed operational chain; duplicate returns 409 ALREADY_SIMULATED with stored-result link and zero second deduction |
 | DB-19 | Fail after FEFO, snapshot/log changes, production, sales, result or history insert | Roll back all batch/snapshot/movement/production/sales/result/history changes; no correction-batch recovery |
 | DB-20 | Leftover 10, concurrent donation 7 and waste 5 | Lock result; accept only feasible allocation; maintain leftover = donated + wasted + remaining_unallocated |
@@ -132,3 +134,7 @@ Run measurements only after implementation under the report reference environmen
 6. Run the planned schema, role, concurrency, rollback, provenance, cost/export and NFR checks; record actual evidence and failures at that time.
 
 The Markdown review may check catalogue counts, field spellings, balanced diagrams/fences, references and contradiction patterns. These static checks are not executed migrations, API tests, ML evaluations, performance measurements or UAT. The genuine open business decision is cancellation/reallocation accounting and allowed reversible donation transitions; re-simulation remains future work.
+
+## Current-weather POS extension (2026-11-13; staged)
+
+After applying the independent-demand migration, apply `supabase/migrations/20261113000100_pos_current_weather.sql` in an isolated database first. It adds no table; it extends the result method check and grants only the protected service role the v3 RPC. Verify `P1007` for past/future dates, `P1006` for stale or mismatched weather, and rejected malformed provenance. Verify exactly one provider fetch per run, a five-minute cache, retryable provider failure, one identical current-weather snapshot on every category, and preserved V1/V2 result snapshots. Re-run shared-stock/FEFO cost, duplicate-request, concurrent-run and injected-failure rollback cases against v3; confirm that no row or inventory deduction survives a failed operation. Compare demand with the same saved scenario but different predictions/production to verify independence. No live migration or database transaction test is claimed here.

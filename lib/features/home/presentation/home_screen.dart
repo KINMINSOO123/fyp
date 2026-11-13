@@ -13,6 +13,7 @@ import '../../inventory/presentation/inventory_admin_screen.dart';
 import '../../inventory/presentation/restock_admin_screen.dart';
 import '../../user_administration/presentation/user_list_screen.dart';
 import '../../pos_simulation/presentation/pos_simulation_screen.dart';
+import '../../pos_simulation/data/pos_simulation_service.dart';
 import '../../leftovers/presentation/leftover_management_screen.dart';
 import '../../leftovers/presentation/charity_partners_screen.dart';
 import '../../reports/presentation/reports_screen.dart';
@@ -22,6 +23,7 @@ import '../../notifications/data/push_registration_manager.dart';
 import '../../administration/presentation/settings_screen.dart';
 import '../../administration/presentation/audit_screen.dart';
 import '../../administration/presentation/calendar_screen.dart';
+import '../../administration/presentation/ai_suggestions_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -37,8 +39,30 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   RealtimeChannel? _notificationChannel;
+  final PosSimulationService _dateService = PosSimulationService();
+  String? _bakeryToday;
+  bool _dateLoading = true;
+  bool _dateError = false;
+
+  Future<void> _loadBakeryDate() async {
+    if (mounted) setState(() { _dateLoading = true; _dateError = false; });
+    try {
+      final date = await _dateService.getBakeryToday();
+      formatBakeryDate(date);
+      if (mounted) setState(() => _bakeryToday = date);
+    } catch (_) {
+      if (mounted) setState(() => _dateError = true);
+    } finally {
+      if (mounted) setState(() => _dateLoading = false);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadBakeryDate();
+  }
 
   String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -81,6 +105,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadBakeryDate();
     PushRegistrationManager.instance.start(widget.profile.userId);
     _notificationChannel = Supabase.instance.client
         .channel('home-notifications:${widget.profile.userId}')
@@ -117,6 +143,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _dateService.close();
     final channel = _notificationChannel;
     if (channel != null) Supabase.instance.client.removeChannel(channel);
     super.dispose();
@@ -177,9 +205,31 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
+        child: RefreshIndicator(
+          onRefresh: _loadBakeryDate,
+          child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
+            if (_bakeryToday != null)
+              Text(
+                formatBakeryDate(_bakeryToday!),
+                style: Theme.of(context).textTheme.titleMedium,
+              )
+            else if (_dateLoading)
+              const Text('Loading bakery date...')
+            else
+              TextButton.icon(
+                onPressed: _loadBakeryDate,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Bakery date unavailable · Retry'),
+              ),
+            if (_dateError && _bakeryToday != null)
+              TextButton(
+                onPressed: _loadBakeryDate,
+                child: const Text('Could not refresh bakery date · Retry'),
+              ),
+            const SizedBox(height: 8),
             Text(
               'Welcome, ${profile.fullName}',
               style: Theme.of(context).textTheme.headlineSmall,
@@ -240,6 +290,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icons.settings_outlined,
                           'Settings',
                           const SettingsScreen(),
+                        ),
+                        (
+                          Icons.auto_awesome_outlined,
+                          'AI bread ideas',
+                          const AiSuggestionsScreen(),
                         ),
                       ];
                 final width = (constraints.maxWidth - 8) / 2;
@@ -328,6 +383,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+              ),
+              const SizedBox(height: 16),
+              BakeryActionCard(
+                icon: Icons.auto_awesome_outlined,
+                title: 'AI Bread Suggestions',
+                subtitle: 'Review draft bread categories and recipes.',
+                onTap: () => _openPage(const AiSuggestionsScreen()),
               ),
               const SizedBox(height: 16),
               Card(
@@ -521,6 +583,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const Center(child: CircularProgressIndicator()),
             ],
           ],
+          ),
         ),
       ),
       bottomNavigationBar: NavigationBar(
@@ -576,4 +639,23 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+String formatBakeryDate(String isoDate) {
+  if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(isoDate)) {
+    throw const FormatException('Invalid bakery date.');
+  }
+  final date = DateTime.parse(isoDate);
+  if (date.toIso8601String().substring(0, 10) != isoDate) {
+    throw const FormatException('Invalid bakery date.');
+  }
+  const weekdays = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  ];
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return '${weekdays[date.weekday - 1]}, ${date.day} '
+      '${months[date.month - 1]} ${date.year}';
 }

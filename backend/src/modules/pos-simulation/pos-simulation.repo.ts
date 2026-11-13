@@ -1,5 +1,7 @@
 import { supabaseAdmin } from "../../config/supabase.js";
 import { AppError } from "../../shared/AppError.js";
+import { validateSimulationItem } from "./simulation-result-validation.js";
+import type { CurrentWeather } from "./current-weather.client.js";
 
 export interface SimulationItem {
   breadCategoryId: string;
@@ -9,6 +11,10 @@ export interface SimulationItem {
   dailyProductionId: string;
   dailyResultId: string;
   predictedUnitsSold: number;
+  simulatedDemand: number;
+  simulationMethod: "PREDICTION_SCALED_V1" | "INDEPENDENT_BASELINE_V2" |
+    "INDEPENDENT_CURRENT_WEATHER_V3";
+  simulationSnapshot: Record<string, unknown> | null;
   predictionMode: "MODEL" | "COLD_START";
   confidence: number | null;
   modelVersionId: string | null;
@@ -51,9 +57,11 @@ export class PosSimulationRepo {
     return data.timezone;
   }
 
-  async complete(actorUserId: string, date: string): Promise<SimulationResult> {
-    const { data, error } = await supabaseAdmin.rpc("complete_pos_simulation", {
+  async complete(actorUserId: string, date: string,
+    weather: CurrentWeather): Promise<SimulationResult> {
+    const { data, error } = await supabaseAdmin.rpc("complete_pos_simulation_v3", {
       p_actor_user_id: actorUserId, p_date: date,
+      p_weather_context: weather,
     });
     if (error) {
       if (error.code === "42501") throw new AppError(403, "FORBIDDEN", error.message);
@@ -65,7 +73,13 @@ export class PosSimulationRepo {
       if (error.code === "P1002") throw new AppError(409, "CONFIRMATION_REQUIRED", error.message);
       if (error.code === "P1003") throw new AppError(409, "PLAN_SHORTAGE", error.message);
       if (error.code === "P1004") throw new AppError(409, "SIMULATION_CONFIG_INVALID", error.message);
-      if (error.code === "PGRST202" || error.code === "42883") {
+      if (error.code === "P1005") throw new AppError(409,
+        "SIMULATION_SETUP_REQUIRED", error.message);
+      if (error.code === "P1006") throw new AppError(503,
+        "CURRENT_WEATHER_UNAVAILABLE", error.message);
+      if (error.code === "P1007") throw new AppError(409,
+        "CURRENT_WEATHER_TODAY_ONLY", error.message);
+      if (["PGRST202", "PGRST205", "42883", "42P01"].includes(error.code)) {
         throw new AppError(503, "SIMULATION_SCHEMA_NOT_READY",
           "The atomic POS simulation migration is not available.");
       }
@@ -77,13 +91,15 @@ export class PosSimulationRepo {
         typeof data.operationId !== "string") {
       throw new Error("The simulation returned an invalid result.");
     }
-    return data as SimulationResult;
+    const result = data as SimulationResult;
+    for (const item of result.items) validateSimulationItem(item, date);
+    return result;
   }
 
   async getResult(date: string): Promise<SimulationResult> {
     const [results, categories, productions, predictions] = await Promise.all([
       supabaseAdmin.from("daily_results").select(
-        "id, result_date, bread_category_id, prediction_id, daily_production_id, predicted_units_sold, produced, units_sold, lost_sales, estimated_demand, leftover, remaining_unallocated_leftover, sales_prediction_error, leftover_rate_pct, revenue, ingredient_cost, gross_profit")
+        "id, result_date, bread_category_id, prediction_id, daily_production_id, predicted_units_sold, produced, units_sold, lost_sales, estimated_demand, leftover, remaining_unallocated_leftover, sales_prediction_error, leftover_rate_pct, revenue, ingredient_cost, gross_profit, simulation_method, simulation_snapshot")
         .eq("result_date", date),
       supabaseAdmin.from("bread_categories").select("id, name, display_order"),
       supabaseAdmin.from("daily_production").select(
@@ -91,6 +107,10 @@ export class PosSimulationRepo {
       supabaseAdmin.from("daily_predictions").select(
         "id, prediction_mode, confidence, model_version_id").eq("target_date", date),
     ]);
+    if (["42703", "PGRST205"].includes(results.error?.code ?? "")) {
+      throw new AppError(503, "SIMULATION_SCHEMA_NOT_READY",
+        "Apply the independent-demand simulation migration.");
+    }
     if (results.error || categories.error || productions.error || predictions.error ||
         !results.data || !categories.data || !productions.data || !predictions.data) {
       throw new AppError(503, "SIMULATION_DATA_UNAVAILABLE",
@@ -114,6 +134,9 @@ export class PosSimulationRepo {
         dailyProductionId: row.daily_production_id,
         dailyResultId: row.id,
         predictedUnitsSold: number(row.predicted_units_sold, "prediction"),
+        simulatedDemand: number(row.estimated_demand, "simulated demand"),
+        simulationMethod: row.simulation_method as SimulationItem["simulationMethod"],
+        simulationSnapshot: row.simulation_snapshot as Record<string, unknown> | null,
         predictionMode: prediction.prediction_mode as "MODEL" | "COLD_START",
         confidence: prediction.confidence === null ? null :
           number(prediction.confidence, "confidence"),
@@ -136,6 +159,7 @@ export class PosSimulationRepo {
     items.sort((left, right) =>
       number(byCategory.get(left.breadCategoryId)?.display_order, "display order") -
       number(byCategory.get(right.breadCategoryId)?.display_order, "display order"));
+    for (const item of items) validateSimulationItem(item, date);
     return { date, operationId: null, items };
   }
 

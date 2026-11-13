@@ -35,7 +35,7 @@ Route modules register handlers; they are not Controller UML classes. See the [l
 
 ## 4. Prediction and data rules
 
-Select one **validated** observation per category/day in `ACTUAL_TRANSACTION` → `IMPORTED_HISTORICAL` → `SIMULATION_GENERATED` priority order. Count distinct selected days for the 30-day threshold. Training and comparable prediction-performance evaluation use `DailySalesRecord.unitsSold`; `estimatedDemand = unitsSold + lostSales` remains analytical.
+For normal training, primary evaluation and prediction lag history, select one **validated non-simulated** observation per category/day in `ACTUAL_TRANSACTION` → `IMPORTED_HISTORICAL` priority order. Count those distinct days for the 30-day threshold. `SIMULATION_GENERATED` rows remain stored and labelled for reports but are excluded from this selector; there is no current simulation-only experiment mode. Training and comparable prediction-performance evaluation use `DailySalesRecord.unitsSold`; `estimatedDemand = unitsSold + lostSales` remains analytical.
 
 Use Random Forest only with at least 30 distinct validated daily observations and a valid active model. With tree-prediction mean `mu` and standard deviation `sigma`, Section 4.9.2 defines:
 
@@ -66,6 +66,6 @@ An administrator explicitly evaluates and activates a candidate. Under NFR-ACC-0
 
 ## 6. Contracts, implementation order and verification
 
-The [README](README.md) defines role-controlled endpoints, discriminated DTOs, SQL invariants, algorithms and failure checks. Current code covers origin selection, saved-factor enrichment through each simulation record's result and prediction, Node ML DTO/client validation, model lifecycle, manager next-day orchestration, Python cold-start/model features, OpenWeather forecast retrieval and request-driven KUL public-holiday year synchronisation. The four context factors and missing-context flag already belong to feature version 1. The new holiday migration remains staged; live provider/database validation and remaining checks are pending. Existing models are not automatically retrained or activated.
+The [README](README.md) defines role-controlled endpoints, discriminated DTOs, SQL invariants, algorithms and failure checks. Current code covers non-simulated origin selection, Node ML DTO/client validation, model lifecycle, manager next-day orchestration, Python cold-start/model features, OpenWeather forecast retrieval and request-driven KUL public-holiday year synchronisation. The four context factors and missing-context flag already belong to feature version 1. Saved-context enrichment remains available for legacy simulation rows but is not invoked by normal history selection. The holiday and independent-demand migrations remain staged; live provider/database validation is pending. Existing models are not automatically retrained or activated.
 
 Verify origin priority and duplicate-day counting; 29/30-day and missing-model boundaries; exact confidence boundaries; null COLD_START confidence across SQL/Zod/Pydantic/Dart; chronological leakage; unavailable MAPE/R²; higher-MAE rejection on a common dataset; rollback and retained artifacts; both cross-role rejections; and prediction within 15 seconds under NFR-PER-02. Automated unit and internal-route tests cover only the implemented subset; no performance, UAT or achieved model-quality result is claimed.

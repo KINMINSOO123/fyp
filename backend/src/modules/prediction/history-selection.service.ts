@@ -30,7 +30,8 @@ export interface SelectedSalesObservation {
 
 export interface RejectedSalesObservation {
   id: string;
-  reason: "UNVALIDATED" | "INVALID_OBSERVATION" | "NOT_HISTORICAL";
+  reason: "UNVALIDATED" | "INVALID_OBSERVATION" | "NOT_HISTORICAL" |
+    "SIMULATION_EXCLUDED";
 }
 
 export interface HistorySelectionResult {
@@ -108,6 +109,13 @@ export class HistorySelectionService {
       // The target day and later days cannot be training or baseline history.
       if (row.salesDate >= targetDate) {
         rejected.push({ id: row.id, reason: "NOT_HISTORICAL" });
+        continue;
+      }
+
+      // Synthetic POS sales are retained for reporting, but cannot train or
+      // evaluate a normal model or provide its prediction history.
+      if (row.dataOrigin === "SIMULATION_GENERATED") {
+        rejected.push({ id: row.id, reason: "SIMULATION_EXCLUDED" });
         continue;
       }
 

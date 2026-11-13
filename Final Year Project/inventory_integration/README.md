@@ -19,7 +19,7 @@ Technical Module 3 delivers Inventory and Smart Production Recommendation and su
 | Recommendation review | BAKERY_MANAGER | `RecommendationController → RecommendationEngine` |
 | Production confirmation/revision | BAKERY_MANAGER | `ProductionDecisionController → ProductionDecisionService` |
 | Permitted inventory/report viewing | Both ACTIVE roles | Read Service/Repo DTOs |
-| Production ingredient deduction | Internal to manager-authorized POS | `TransactionRecordingService`, `SimulationCommitRepo`, `FefoBatchService` |
+| Production ingredient deduction | Internal to manager-authorized POS | `PosSimulationService`, `PosSimulationRepo`, `complete_pos_simulation_v3` FEFO RPC |
 
 Every request validates JWT and the ACTIVE stored profile before permissions. Administrator accounts cannot confirm production; manager accounts cannot mutate catalogue/inventory. Never accept actor, role or feasibility claims from the client. Flutter ordinary CRUD uses Node. Supabase Auth, recipient-only foreground Realtime and FCM background notifications remain platform exceptions; FastAPI has no database access.
 
@@ -247,7 +247,7 @@ Module 4 snapshots transaction selling prices and stores consistent daily totals
 
 There is no public ingredient-deduction endpoint: POS invokes the protected internal transaction. Referenced batches and movements cannot be deleted or recosted by generic CRUD; administrative operations preserve audit/history.
 
-The implemented `InventoryAdminScreen` exposes category, ingredient, recipe and ordinary batch forms to the administrator; `RestockAdminScreen` reviews requests and uses the same batch receipt endpoint for linked arrivals. `ProductionPlanningScreen` displays prediction, mode-aware confidence, joint capacity and desired-production shortfalls, with manager confirmation before requesting stock. It never shows a cold-start percentage. Managers cannot use administrator receipt/cancellation routes.
+The implemented `InventoryAdminScreen` exposes category, ingredient, recipe and ordinary batch forms to the administrator; `RestockAdminScreen` reviews requests and uses the same batch receipt endpoint for linked arrivals. `ProductionPlanningScreen` defaults to the existing next bakery date and also lets the manager select another date to read saved predictions and that date's plan. It shows a clear empty state when no predictions exist and treats processed plans as read-only. Confirmation/revision still goes through existing server checks; selecting a date never generates predictions. The screen displays mode-aware confidence, joint capacity and desired-production shortfalls, with manager confirmation before requesting stock. It never shows a cold-start percentage. Managers cannot use administrator receipt/cancellation routes. No new today/tomorrow execution rule is imposed by this View; the supervisor decision remains pending.
 
 Low-stock, expiry and external/system-failure events pass through Module 1's `NotificationService`. Notification rows identify one `recipient_user_id`; preferences are per type/user. Foreground visibility and read state are recipient-only through Supabase Realtime's narrow read policy. Node owns writes/mark-read. Push uses only active valid tokens belonging to that opted-in recipient and records PENDING, SUBMITTED, DELIVERED, FAILED or SKIPPED attempts; SUBMITTED is not confirmed delivery. No global broadcast/deduplication assumption applies.
 

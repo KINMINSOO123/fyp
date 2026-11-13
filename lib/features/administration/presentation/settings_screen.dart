@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'calendar_screen.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/administration_service.dart';
 import 'prediction_rules_form.dart';
+import 'simulation_configuration_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({this.gateway, super.key});
@@ -201,6 +203,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('Save bakery settings'),
           ),
           const Divider(height: 36),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.event_available_outlined),
+              title: const Text('KL Public Holidays'),
+              subtitle: const Text(
+                'Check 2026 coverage and refresh published holidays for POS simulation.',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const CalendarScreen()),
+              ),
+            ),
+          ),
+          const Divider(height: 36),
           Text(
             'Prediction confidence',
             style: Theme.of(context).textTheme.titleLarge,
@@ -237,6 +253,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
               busy: _saving || _loading,
               onSave: _saveContext,
             ),
+          const Divider(height: 36),
+          Text(
+            'POS simulation demand',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const Text(
+            'Configure independent category baselines and demo '
+            'scenario adjustments. These settings do not use ML predictions.',
+          ),
+          OutlinedButton.icon(
+            onPressed: _loading || _saving
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SimulationConfigurationScreen(),
+                    ),
+                  ),
+            icon: const Icon(Icons.tune),
+            label: const Text('Open simulation demand settings'),
+          ),
           const Divider(height: 36),
           Text('Service status', style: Theme.of(context).textTheme.titleLarge),
           const Text(

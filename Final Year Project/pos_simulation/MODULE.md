@@ -2,7 +2,7 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. As of 2026-11-09, Node POS initiation and reads, a Flutter screen, and the atomic `complete_pos_simulation` migration are implemented locally. The migration is staged, not applied or verified live; notifications and reporting/export integration remain planned. See the [detailed transaction plan](README.md), [schema](../../database_canonical_design.md), [architecture](../ARCHITECTURE.md) and [traceability](../../planning_documents_change_report.md).
+Reconciled on 2026-10-11 against the latest `RSW_SooKinMin_Project1 (1).docx`, Sections 1.4.2, 3.5–3.6, 4.5.3–4.5.4, 4.7.2, 4.8 and 4.9.3. The 2026-11-12 implementation revision replaces prediction-scaled demand with a separately configured deterministic baseline/scenario. The 2026-11-13 revision uses validated OpenWeather Current Weather for bakery-local today and snapshots its provenance separately from prediction forecasts. Both POS migrations are staged, not applied or verified live. The FYP report remains unchanged. See the [detailed transaction plan](README.md), [schema](../../database_canonical_design.md), [architecture](../ARCHITECTURE.md) and [traceability](../../planning_documents_change_report.md).
 
 ## 1. Scope and functional-module mapping
 
@@ -19,17 +19,18 @@ Modules 0–1 provide normalized tables, row locking, JWT/ACTIVE-profile/role ch
 | `PosSimulationController` | Manager initiation and permitted reads; thin router is a separate module |
 | `PosSimulationService` | Strict request/date validation and bakery-local default date |
 | `PosSimulationRepo` | Protected single RPC commit plus permitted result/transaction reads |
-| `complete_pos_simulation` SQL function | One transaction with shared-stock checks, FEFO batch movements, sales variation, production, results, history and audit |
-| `PosSimulationScreen` | Date, prerequisites, explicit run action, retry and simulated labels |
+| `CurrentWeatherClient` adapter; `complete_pos_simulation_v3` SQL function | One validated current-weather lookup before one transaction with independent demand, shared-stock checks, FEFO batch movements, production, results, history and audit |
+| `SimulationConfigurationController/Service/Repo` | Administrator-only saved category baselines and independent scenario settings |
+| `PosSimulationScreen`, `SimulationConfigurationScreen` | Manager run/result scenario; administrator baseline and adjustment form |
 
 ## 3. Mandatory atomic workflow
 
 1. Verify JWT, ACTIVE profile and manager permission; validate date, predictions and confirmed decisions.
-2. Use the stored contextualised prediction as baseline. Do not reapply weather, holiday or season factors or call external context services during the transaction.
+2. Require a saved baseline for every active category and valid cached KL holiday-year coverage. For a simulation dated today in the bakery timezone, fetch OpenWeather Current Weather once through a backend adapter before the database transaction. Validate the provider location and timestamp; fail with a retryable error if unavailable or stale. Generate demand from the saved category baseline, independent weekday/holiday/current-weather demo factors and seeded bounded variation. The prediction and its forecast snapshot do not enter demand generation. Past/future dates can be viewed but cannot start a new current-weather simulation.
 3. Start one Node-owned PostgreSQL transaction. Serialize the date's production plan; lock decisions and shared inventory/batches deterministically. Re-read prerequisites, reject processed decisions and validate combined requirements.
 4. Deduct valid batches by ascending `expiry_date`, then `received_date`, then `id`, excluding expired/inactive batches. Update snapshots and linked movements exactly once before sales processing.
-5. Process sales using configured stochastic/time-slot variation. Persist production, transactions, `DailyResult` and one validated `DailySalesRecord` per category with `SIMULATION_GENERATED` origin and source-result reference.
-6. Commit all writes together. Any failure rolls back batches, snapshots, movements, production, transactions, results and simulation history. Decisions remain unprocessed; retry revalidates stock. Recipient notifications after commit remain planned.
+5. Compute `units_sold = min(simulated_demand, produced)`, `lost_sales = max(0, simulated_demand - produced)` and `leftover = produced - units_sold`; distribute sold units across time slots. Persist production, transactions, `DailyResult` with method/snapshot and one validated `DailySalesRecord` per category with `SIMULATION_GENERATED` origin and source-result reference.
+6. Commit all writes together. Any failure rolls back batches, snapshots, movements, production, transactions, results and simulation history. Decisions remain unprocessed; retry revalidates stock. Existing recipient notification hooks run after commit, separately from the atomic operational write.
 
 Unique prediction → decision → production → result links and locks prevent double deduction. No `SimulationRun` or `LeftoverRecord` table is required. Deliver recipient notifications after commit; push failure cannot cause rerunning production.
 
@@ -52,12 +53,12 @@ The proposed cost convention is MYR/kg; immutable batch cost snapshots and trans
 
 ## 5. Contracts and retry policy
 
-`POST /api/simulations` accepts `{ date?: ISODate }`; Node derives the default date and actor. Reject client production/actor/role/feasibility fields. `GET /api/simulations/today` gives the bakery-local date. `GET /api/simulations/:date` and `GET /api/simulations/:date/transactions` return permitted filtered/paginated data to either active role.
+`POST /api/simulations` accepts `{ date?: ISODate }`; Node derives the default date and actor and requires the date to be bakery-local today. It rejects client weather, production, actor, role, feasibility and prediction fields. `GET /api/simulations/today` gives the bakery-local date. `GET /api/simulations/:date` and `GET /api/simulations/:date/transactions` return permitted filtered/paginated data to either active role. `GET /api/admin/simulation`, `PUT /api/admin/simulation/baselines/:categoryId` and `PATCH /api/admin/simulation/scenario` are administrator-only.
 
 A completed decision cannot be simulated again. Duplicates return `409 ALREADY_SIMULATED` with a stored-result link and no writes. Re-simulation/retrospective correction are future work until an explicit atomic policy covers exact original batch movements, transactions, linked history, reports and leftover allocations. Correction batches/separate reversal commits do not substitute for rollback. Pure test fixtures must not write operational data or share a confirmation-bypassing endpoint.
 
 ## 6. Implementation and verification plan
 
-Implemented locally: manager-only initiation; both-role result/transaction reads; a Flutter simulation View; a staged single-transaction RPC with locks, FEFO/cost calculations, sales, history and audit. Still required: apply and verify the migration, recipient events after commit, reports/exports, functional/failure/performance checks. Atomicity is a prerequisite for operational use.
+Implemented locally: manager-only initiation; both-role result/transaction reads; manager and administrator Flutter Views; an OpenWeather Current Weather backend adapter; staged single-transaction v2/v3 RPCs with locks, FEFO/cost calculations, independent demand, sales, history and audit. The 2026-11-12 migration adds `simulation_baselines`, `simulation_scenarios` and `daily_results.simulation_method/simulation_snapshot`; the 2026-11-13 migration adds the current-weather v3 wrapper. Old results retain `PREDICTION_SCALED_V1` or `INDEPENDENT_BASELINE_V2`; new results use `INDEPENDENT_CURRENT_WEATHER_V3`. Simulated records remain stored for reporting but are excluded from normal model training and primary evaluation. Both migrations and database transaction/concurrency checks still require live execution and verification.
 
-The [README](README.md) specifies duplicate/concurrent requests, failure injection after each write stage, FEFO versus FIFO, snapshot costs/prices, zero production, signed error, single-context logic, role rejection and a 12-hour simulation within 30 seconds for up to 20 categories. All are planned checks, not completed results.
+The [README](README.md) specifies duplicate/concurrent requests, failure injection after each write stage, FEFO versus FIFO, snapshot costs/prices, zero production, signed error, demand independence/reproducibility, role rejection and a 12-hour simulation within 30 seconds for up to 20 categories. Database integration and performance results remain unreported.

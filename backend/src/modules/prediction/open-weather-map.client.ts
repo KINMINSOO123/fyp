@@ -12,7 +12,7 @@ function bakeryDate(epochSeconds: number, timezone: string): string {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-function condition(id: number): WeatherCondition {
+export function mapOpenWeatherCondition(id: number): WeatherCondition {
   if (id >= 200 && id < 300) return "STORM";
   if (id >= 300 && id < 600) return "RAIN";
   if (id === 800) return "CLEAR";
@@ -43,7 +43,7 @@ export function parseOpenWeatherForecast(raw: unknown, targetDate: string,
       throw new AppError(503, "WEATHER_PROVIDER_UNAVAILABLE",
         "Weather forecast point is invalid.");
     }
-    points.push({ temp, humidity, condition: condition(id) });
+    points.push({ temp, humidity, condition: mapOpenWeatherCondition(id) });
   }
   if (points.length < 4) throw new AppError(503,
     "WEATHER_PROVIDER_UNAVAILABLE", "Next-day weather coverage is incomplete.");

@@ -40,13 +40,14 @@ class PosSimulationService implements PosSimulationGateway {
       );
 
   @override
-  Future<SimulationResult> run(String date) async => SimulationResult.fromJson(
-    _data(
-      await _apiClient.postJson('/api/simulations', {
-        'date': date,
-      }, timeout: const Duration(seconds: 45)),
-    ),
-  );
+  Future<SimulationResult> run(String date) async =>
+      SimulationResult.fromJson(
+        _data(
+          await _apiClient.postJson('/api/simulations', {
+            'date': date,
+          }, timeout: const Duration(seconds: 45)),
+        ),
+      );
 
   void close() => _apiClient.close();
 }

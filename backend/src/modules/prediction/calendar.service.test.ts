@@ -11,9 +11,9 @@ test("T-DP-CAL-01 [BR-UAM-02, FR-ADM-02]: only administrator can inspect and ref
   const calls: string[] = [];
   const controller = new KlHolidayController({
     async list(year) { calls.push(`list:${year}`); return {
-      year, stateCode: "KUL", coverage: null, events: [] }; },
+      year, stateCode: "KUL", status: "NOT_SYNCED", coverage: null, events: [] }; },
     async refresh(actor, year) { calls.push(`refresh:${actor}:${year}`);
-      return { year, stateCode: "KUL", coverage: null, events: [] }; },
+      return { year, stateCode: "KUL", status: "NOT_SYNCED", coverage: null, events: [] }; },
   });
   const app = express();
   app.use(express.json(), createAuthenticate({ async authenticate(token) {

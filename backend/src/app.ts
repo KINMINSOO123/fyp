@@ -13,6 +13,8 @@ import inventoryAdminRouter from "./modules/inventory/inventory-admin.routes.js"
 import { managerRestockRouter, adminRestockRouter } from
   "./modules/inventory/restock.routes.js";
 import posSimulationRouter from "./modules/pos-simulation/pos-simulation.routes.js";
+import simulationConfigurationRouter from
+  "./modules/pos-simulation/simulation-configuration.routes.js";
 import { leftoverRouter, donationRouter, wasteRouter,
   charityAdminRouter } from "./modules/leftovers/leftover.routes.js";
 import { reportRouter, dashboardRouter } from "./modules/reports/report.routes.js";
@@ -20,6 +22,7 @@ import { notificationRouter, preferenceRouter, tokenRouter,
   pendingRouter, inventoryAlertRouter } from "./modules/notifications/notification.routes.js";
 import { settingsRouter, auditRouter, serviceStatusRouter } from
   "./modules/administration/administration.routes.js";
+import aiSuggestionsRouter from "./modules/ai-suggestions/ai-suggestions.routes.js";
 
 const app = express();
 
@@ -44,12 +47,16 @@ app.use("/api/admin/models", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), 
 app.use("/api/admin/calendar-events", authenticate,
   requireRole("SYSTEM_ADMINISTRATOR"), calendarRouter);
 app.use("/api/admin/inventory", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), inventoryAdminRouter);
+app.use("/api/admin/ai-suggestions", authenticate,
+  requireRole("SYSTEM_ADMINISTRATOR"), aiSuggestionsRouter);
 app.use("/api/admin/restock-requests", authenticate,
   requireRole("SYSTEM_ADMINISTRATOR"), adminRestockRouter);
 app.use("/api/restock-requests", authenticate,
   requireRole("BAKERY_MANAGER"), managerRestockRouter);
 app.use("/api/predictions", authenticate, predictionRouter);
 app.use("/api/simulations", authenticate, posSimulationRouter);
+app.use("/api/admin/simulation", authenticate,
+  requireRole("SYSTEM_ADMINISTRATOR"), simulationConfigurationRouter);
 app.use("/api/leftovers", authenticate, leftoverRouter);
 app.use("/api/donations", authenticate, donationRouter);
 app.use("/api/waste-records", authenticate, wasteRouter);

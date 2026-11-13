@@ -72,6 +72,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   Widget build(BuildContext context) {
     final coverage = _summary?['coverage'];
+    final status = _summary?['status']?.toString() ?? 'NOT_SYNCED';
     final events = _summary?['events'];
     final rows = events is List ? events : const [];
     return Scaffold(
@@ -115,6 +116,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             const SizedBox(height: 16),
+            Text('Year: ${_summary?['year'] ?? _selectedYear ?? '—'} · Kuala Lumpur (KUL)'),
+            Text(
+              switch (status) {
+                'READY' => 'Sync status: Ready for simulation',
+                'REFRESH_DUE' => 'Sync status: Refresh due',
+                'INCOMPLETE' => 'Sync status: Incomplete — refresh required',
+                _ => 'Sync status: Not synced — refresh required',
+              },
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             Text(
               coverage is Map
                   ? 'Last successful sync: ${coverage['lastSuccessfulAt']}'
@@ -122,7 +133,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (coverage is Map)
-              Text('Refresh due: ${coverage['refreshAfter']}'),
+              Text('Refresh due: ${coverage['refreshAfter']} · '
+                  'published events: ${coverage['eventCount']}'),
             const SizedBox(height: 8),
             Text(
               'KL public holidays (${rows.length})',

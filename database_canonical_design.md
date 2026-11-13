@@ -2,11 +2,11 @@
 
 **Design revision - 2026-10-16:** At the user's request, FEFO replaces the report's FIFO policy: eligible batches are consumed by `expiry_date ASC, received_date ASC, id ASC`. The DOCX/report mirror remain unchanged; this is an explicit departure from Sections 4.5.3-4.5.4 and 4.9.3, including BR-INV-05/FR-INV-06. Other report requirements still apply.
 
-**Status:** Report-derived canonical design with later staged local extensions; the 2026-11-11 restock and 2026-11-12 KL holiday changes are not yet reflected in the report or applied live
+**Status:** Report-derived canonical design with later staged local extensions; the 2026-11-11 restock and 2026-11-12 KL holiday/independent POS demand changes are not yet reflected in the report or verified live
 **Historical design snapshot:** 31 July 2026; reconciled 11 October 2026
 **Chapter target:** Chapter 4.5.2 Entity-Relationship Diagram
 **Authority:** latest `RSW_SooKinMin_Project1 (1).docx`, especially §§4.5.1–4.5.4, 4.7–4.9; repository report mirror: [RSW_SooKinMin_Project1.docx.md](RSW_SooKinMin_Project1.docx.md)
-**Implementation scope:** Schema and workflow reference; executable extensions are in `supabase/migrations/20261111000100_restock_requests.sql` and `supabase/migrations/20261112000100_kl_holiday_sync.sql`
+**Implementation scope:** Schema and workflow reference; executable extensions are in `supabase/migrations/20261111000100_restock_requests.sql`, `supabase/migrations/20261112000100_kl_holiday_sync.sql` and `supabase/migrations/20261112000200_independent_pos_demand.sql`
 
 ## 1. Authority and implementation status
 
@@ -19,7 +19,7 @@ This is the current reconciled planning design. The latest DOCX takes precedence
 - Historical operational records are retained; master data is deactivated rather than cascade-deleted.
 - The POS completion workflow is one Node-owned PostgreSQL transaction/RPC.
 
-The historical report-derived catalogue had 29 public tables. The staged restock extension adds two tables and the KL holiday coverage extension adds one. Local migrations and application Repos now exist, but this document does not assert which migrations have been applied to the live Supabase project. These extensions are staged and unverified live.
+The historical report-derived catalogue had 29 public tables. The staged restock extension adds two tables, the KL holiday coverage extension adds one, and independent POS demand adds two. Local migrations and application Repos now exist, but this document does not assert which migrations have been applied to the live Supabase project. These extensions are staged and unverified live.
 
 The application serves one bakery on Android. Four example categories and five ingredients are seed examples, not limits; algorithms handle configured active categories and the reference workload of up to 20 categories. No customer ordering/payment, delivery/marketplace, real POS hardware, multi-branch operation or automatic background scheduling is introduced.
 
@@ -56,6 +56,9 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Calendar-event type | `PUBLIC_HOLIDAY`, `SCHOOL_HOLIDAY`, `LOCAL_EVENT`, `RELIGIOUS_HOLIDAY` |
 | KL holiday provider (2026-11-12 extension) | `MALAYSIA_HOLIDAY_API` |
 | KL holiday state (2026-11-12 extension) | `KUL` |
+| Simulation baseline source (2026-11-12 extension) | `MANUAL`, `IMPORTED_HISTORICAL_AVERAGE` |
+| Simulation method | `PREDICTION_SCALED_V1`, `INDEPENDENT_BASELINE_V2`, `INDEPENDENT_CURRENT_WEATHER_V3` |
+| Simulation weather category | `CLEAR`, `CLOUDY`, `RAIN`, `STORM`, `OTHER`; legacy V2 manual scenarios may retain `NEUTRAL` |
 | Model type | `RANDOM_FOREST`, `LINEAR_REGRESSION` |
 | Model lifecycle | `CANDIDATE`, `ACTIVE`, `INACTIVE`, `REJECTED` |
 | Evaluation label | `ACTUAL_ONLY`, `IMPORTED_HISTORICAL_ONLY`, `SIMULATION_BASED`, `MIXED_NON_SIMULATION` |
@@ -90,6 +93,8 @@ In the planned canonical schema, these values are represented by CHECK constrain
 | Context | `weather_records` | Daily forecast cache and provenance, not observed historical weather |
 | Context | `calendar_events` | Current KL public holidays plus retained historical event rows |
 | Context extension | `kl_holiday_syncs` | Successful KUL year coverage and refresh metadata |
+| POS configuration extension | `simulation_baselines` | One explicitly saved source-labelled base demand per category |
+| POS configuration extension | `simulation_scenarios` | Singleton, separately versioned demo demand adjustments and variation bound |
 | ML history | `daily_sales_records` | Validated units-sold observations with exact source provenance |
 | ML governance | `ml_model_versions` | Retained model candidate/active/inactive/rejected metadata |
 | ML governance | `model_evaluations` | Origin-labelled chronological-holdout metrics |
@@ -111,7 +116,7 @@ In the planned canonical schema, these values are represented by CHECK constrain
 
 `sales_by_timeslot` remains a computed PostgreSQL view, not a base table.
 
-Counts derived from this staged catalogue: **32 public application tables** (29 report-derived, two restock-extension tables and one KL holiday coverage table), **1 external Auth table**, **1 computed view**, and **0 PostgreSQL enum types**. Section 3 has **24 controlled-value domains**, including restock status, holiday provider and state, implemented as text CHECK constraints. Pending-action indicators are derived on app open/refresh or explicit state requests, not scheduled reminder rows.
+Counts derived from this staged catalogue: **34 public application tables** (29 report-derived, two restock tables, one KL holiday coverage table and two simulation configuration tables), **1 external Auth table**, **1 computed view**, and **0 PostgreSQL enum types**. Section 3 has **27 controlled-value domains**, implemented as text CHECK constraints. Pending-action indicators are derived on app open/refresh or explicit state requests, not scheduled reminder rows.
 
 ## 5. Final columns, keys and constraints
 
@@ -371,7 +376,7 @@ Uniqueness:
 - partial UNIQUE (`data_origin`, `external_source_reference`) where origin is actual/imported; and
 - the POS completion RPC guarantees one simulation-generated row for every completed `daily_results` row before commit.
 
-If more than one origin exists for the same category/day, prediction/training selection uses one validated observation in priority order `ACTUAL_TRANSACTION`, then `IMPORTED_HISTORICAL`, then `SIMULATION_GENERATED`; it never counts multiple origins for the same category/day as separate demand observations.
+If more than one origin exists for the same category/day, normal prediction/training/primary-evaluation selection uses one validated non-simulated observation in priority order `ACTUAL_TRANSACTION`, then `IMPORTED_HISTORICAL`; it never counts multiple origins for the same category/day. `SIMULATION_GENERATED` stays linked for operational reporting but is excluded from normal model inputs and eligibility.
 
 A composite FK (`source_daily_result_id`, `sales_date`, `bread_category_id`) references the corresponding unique key on `daily_results` so a generated history row cannot use a different date/category.
 
@@ -483,7 +488,7 @@ predicted_units_sold = max(0, round(mu))
 confidence = 100 * max(0, min(1, 1 - sigma / max(abs(mu), 1)))
 ```
 
-MODEL requires at least 30 distinct validated daily observations selected by actual → imported → simulation priority and a valid active RF model. Otherwise `Bc` is the category's average available valid units-sold observations, or its configured base quantity only if no valid observations exist. `COLD_START` uses `max(0, round(Bc * Dt * Mt * Wt * Ht))` for configured weekday, monsoon, weather and holiday factors, with null confidence and a low-confidence heuristic label. MODEL is Low Confidence below the configurable threshold, initially 75%. Confidence measures tree agreement, not an accuracy probability or a guarantee of improvement. Context has already been applied to the stored prediction and is not multiplied again during POS simulation.
+MODEL requires at least 30 distinct validated non-simulated daily observations selected by actual → imported priority and a valid active RF model. Otherwise `Bc` is the category's average available valid units-sold observations, or its configured base quantity only if no valid observations exist. `COLD_START` uses `max(0, round(Bc * Dt * Mt * Wt * Ht))` for configured weekday, monsoon, weather and holiday factors, with null confidence and a low-confidence heuristic label. MODEL is Low Confidence below the configurable threshold, initially 75%. Confidence measures tree agreement, not an accuracy probability or a guarantee of improvement. POS demand is independently configured; the stored prediction is comparison data only.
 
 #### `prediction_calendar_events`
 
@@ -540,6 +545,31 @@ Confirmation stores authorization only; it does not deduct inventory. The Servic
 
 UNIQUE (`production_date`, `bread_category_id`) and UNIQUE (`id`, `production_date`, `bread_category_id`). A composite FK to the production decision ensures the decision, date and category match. The unique `production_decision_id` means one decision authorizes at most one production row.
 
+#### `simulation_baselines` (2026-11-12 technical extension)
+
+| Column | PostgreSQL type | Null/default | Key and constraints |
+|---|---|---|---|
+| `bread_category_id` | `uuid` | NOT NULL | PK; FK → `bread_categories.id` ON DELETE RESTRICT |
+| `base_demand` | `numeric(12,3)` | NOT NULL | 0–1,000,000; units per category/day |
+| `baseline_source` | `text` | NOT NULL | `MANUAL` or `IMPORTED_HISTORICAL_AVERAGE` |
+| `imported_sample_count`, `imported_first_date`, `imported_last_date`, `imported_fingerprint` | integer/date/date/text | NULL for manual | Required for imported average; snapshot of selected validated imported source rows |
+| `configured_by`, `configured_at` | uuid/timestamptz | NOT NULL | Active administrator actor; profile FK and save time |
+
+The administrator explicitly saves an average or manual value. The average uses validated imported rows before the bakery-local current date, omitting dates where a validated actual row takes priority. It never uses simulated records, predictions, production or model metrics and is not automatically refreshed.
+
+#### `simulation_scenarios` (2026-11-12 technical extension)
+
+| Column | PostgreSQL type | Null/default | Key and constraints |
+|---|---|---|---|
+| `singleton_guard` | `boolean` | NOT NULL; default true | PK, true-only singleton |
+| `scenario_version` | `integer` | NOT NULL | Starts at 1; increments on administrator save |
+| `weekday_factors`, `weather_factors` | `jsonb` | NOT NULL | Seven weekday and six demo-weather factors, 0–3 each |
+| `holiday_factor`, `non_holiday_factor` | `numeric(8,4)` | NOT NULL | Separate KL holiday/ordinary-day adjustments, 0–3 |
+| `variation_max_pct` | `numeric(5,2)` | NOT NULL | Bounded 0–30%; initial demo value 10% |
+| `updated_by`, `updated_at` | uuid/timestamptz | actor nullable for initial seed | Administrator update trace |
+
+These factors are separate from Prediction context settings. New V3 runs use one validated OpenWeather Current Weather observation for the bakery-local current date; old V2 manual scenarios retain their saved weather. The backend uses a five-minute cache, five-second request timeout, 30-minute provider-age limit and location check. An unavailable/stale observation is a retryable error, never a neutral/CLEAR/forecast fallback. Holiday status requires valid cached `kl_holiday_syncs` coverage; a missing year/expired coverage cannot be called a non-holiday.
+
 #### `daily_results`
 
 | Column | PostgreSQL type | Null/default | Key and constraints |
@@ -562,6 +592,8 @@ UNIQUE (`production_date`, `bread_category_id`) and UNIQUE (`id`, `production_da
 | `revenue` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `revenue >= 0`; transactionally verified sales subtotal cache |
 | `ingredient_cost` | `numeric(14,2)` | NOT NULL; default `0` | CHECK `ingredient_cost >= 0`; sum actual FEFO consumption at immutable batch cost snapshots |
 | `gross_profit` | `numeric(14,2)` | Generated/stored | `revenue - ingredient_cost`; may be negative |
+| `simulation_method` | `text` | NOT NULL; default `PREDICTION_SCALED_V1` | Existing rows keep V1/V2 identity; new current-weather rows use `INDEPENDENT_CURRENT_WEATHER_V3` |
+| `simulation_snapshot` | `jsonb` | NULL for legacy rows | New rows require baseline/source, factors, holiday coverage, variation, seed/version and generated demand |
 | `created_at` | `timestamptz` | NOT NULL; default `now()` | — |
 
 UNIQUE (`result_date`, `bread_category_id`) and UNIQUE (`id`, `result_date`, `bread_category_id`). Composite FKs ensure the linked prediction and production have the same date/category. One production produces at most one daily result because `daily_production_id` is unique.
@@ -749,6 +781,9 @@ Entity type/ID must be both NULL or both non-null. Logs are append-only through 
 | `inventory` | `inventory_log` | `1 → 0..*` movements | exactly `1` | NOT NULL FK |
 | `inventory_batches` | `inventory_log` | `1 → 0..*` movements | exactly `1` | NOT NULL FK |
 | `bread_categories` | `daily_sales_records` | `1 → 0..*` observations | exactly `1` | NOT NULL FK |
+| `bread_categories` | `simulation_baselines` | `1 → 0..1` saved baseline | exactly `1` category | PK/FK |
+| `user_profiles` | `simulation_baselines` | `1 → 0..*` configuration actions | exactly `1` actor | NOT NULL FK |
+| `user_profiles` | `simulation_scenarios` | `1 → 0..1` latest setting actor | `0..1` actor for initial seed | Nullable FK |
 | `bread_categories` | `ml_model_versions` | `1 → 0..*` versions | exactly `1` | NOT NULL FK |
 | `ml_model_versions` | `model_evaluations` | `1 → 0..*` evaluations | exactly `1` | NOT NULL FK |
 | `ml_model_versions` | `feature_importance` | `1 → 0..*` feature rows | exactly `1` | NOT NULL FK |
@@ -895,7 +930,7 @@ For example, 1,000 g flour with two 100 g/unit categories and predictions of 8 e
 
 ### 9.1 POS completion/FEFO RPC
 
-The canonical Node-owned PostgreSQL transaction/RPC is `complete_pos_simulation`. The name specifies a design contract, not an implemented function.
+The current Node-owned PostgreSQL transaction/RPC is `complete_pos_simulation_v3` in the staged 2026-11-13 migration. It validates current-weather provenance and today's bakery date, invokes the locked independent-demand v2 operation, and adds the v3 method/snapshot before the same transaction commits. Direct service-role execution of v2 is revoked; completed V1/V2 results are retained and labelled.
 
 One call covers the selected business date and all included categories so the simulation is all-or-nothing:
 
@@ -904,14 +939,14 @@ One call covers the selected business date and all included categories so the si
 3. It locks the relevant decisions, inventory snapshots and usable batches using row locks.
 4. It recalculates combined ingredient requirements of all outstanding decisions, including commitments outside the requested subset, and validates the selected confirmed quantities; processed decisions are excluded.
 5. It rejects expired/inactive/unreceived batches and validates enough usable stock before writing anything. Inventory locks use a consistent ingredient order to prevent concurrent overspending.
-6. It deducts selected decisions exactly once in ascending `expiry_date`, `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with shared `operation_id` and decision ID. Only then does sales processing apply time-slot/stochastic variation around the stored contextualised prediction, without multiplying weather/holiday/season effects again.
-7. It inserts one `daily_production` per decision and one `daily_results` per production, initializing remaining unallocated leftover to generated leftover.
+6. It requires saved category baselines, valid cached KL holiday-year coverage and one validated OpenWeather Current Weather observation fetched by Node before the transaction. Only bakery-local today is supported for a new run. It resolves the administrator's separate weekday/KL-holiday/current-weather demo factors. A stable date/category/scenario-version seed supplies bounded variation. `simulated_demand = round(base_demand * weekday * holiday * weather * variation)` is calculated independently of predictions and production, then `units_sold = min(simulated_demand, produced)`, `lost_sales = max(0, simulated_demand - produced)` and `leftover = produced - units_sold`. The v3 snapshot retains weather provider, observation/fetch timestamps and location without changing prediction-time forecast context.
+7. It deducts selected decisions exactly once in ascending `expiry_date`, `received_date`, `id` order; updates `inventory`; and inserts negative `inventory_log` rows with shared `operation_id` and decision ID. It inserts one `daily_production` per decision and one `daily_results` per production, initializing remaining unallocated leftover and recording the method/simulation snapshot. Time slots only distribute fulfilled sales.
 8. It inserts all `sales_transactions` under their `daily_result_id` and verifies each result's `units_sold` and revenue against those transactions.
 9. It inserts exactly one validated `daily_sales_records` row per result with `data_origin = 'SIMULATION_GENERATED'` and the matching `source_daily_result_id`.
 10. It writes success audit events and verifies `inventory.quantity_grams` equals the total usable batch remainder.
 11. It commits once. Any validation, deduction, insert, calculation or audit failure raises an exception and PostgreSQL rolls back inventory batches, inventory snapshots, logs, production, sales, results and generated sales history together.
 
-`PosSimulationService` and `TransactionRecordingService` own this operation through `SimulationCommitRepo`. A Node-owned PostgreSQL transaction with a single connection is the primary orchestration contract; an equivalent RPC is permitted only if it preserves the same validation/locking/deduction-before-sales sequence. External-service calls are outside the transaction. Notification dispatch occurs after successful commit and cannot partially commit an operational result.
+`PosSimulationService -> CurrentWeatherClient -> PosSimulationRepo -> complete_pos_simulation_v3` owns this operation. The weather call occurs once outside the transaction; the protected RPC executes in one PostgreSQL transaction with the same validation/locking/deduction-before-sales sequence. Notification dispatch occurs after successful commit and cannot partially commit an operational result. Normal ML training, primary evaluation and prediction history exclude simulation-origin rows; the origin and legacy evaluation labels remain intact.
 
 Idempotency is enforced by locking decisions and the unique decision → production → result and simulation-history relationships, not by an unconstrained UUID alone. A duplicate request returns `409 ALREADY_SIMULATED` with a stored-result link, without further inventory or history mutation. No partial second date-level simulation is added. Re-simulation is **future work**: the current plan rejects replacement of completed operational results. Any later proposal must specify atomic exact-original-batch reversal, expiry handling, price/cost snapshots, linked sales/history/allocation/model-input retention and idempotency; generic correction batches or deleting history are not recovery mechanisms. `PRODUCTION_REVERSAL` is a reserved controlled value, not a current implemented endpoint.
 
@@ -1225,6 +1260,30 @@ erDiagram
         timestamptz created_at
     }
 
+    SIMULATION_BASELINES {
+        uuid bread_category_id PK, FK
+        numeric base_demand
+        text baseline_source
+        int imported_sample_count
+        date imported_first_date
+        date imported_last_date
+        text imported_fingerprint
+        uuid configured_by FK
+        timestamptz configured_at
+    }
+
+    SIMULATION_SCENARIOS {
+        boolean singleton_guard PK
+        int scenario_version
+        jsonb weekday_factors
+        jsonb weather_factors
+        numeric holiday_factor
+        numeric non_holiday_factor
+        numeric variation_max_pct
+        uuid updated_by FK
+        timestamptz updated_at
+    }
+
     DAILY_RESULTS {
         uuid id PK
         date result_date
@@ -1244,6 +1303,8 @@ erDiagram
         numeric revenue
         numeric ingredient_cost
         numeric gross_profit
+        text simulation_method
+        jsonb simulation_snapshot
         timestamptz created_at
     }
 
@@ -1360,6 +1421,8 @@ erDiagram
     USER_PROFILES ||--o{ NOTIFICATION_PREFERENCES : configures
     USER_PROFILES ||--o{ FCM_TOKENS : registers
     USER_PROFILES o|--o{ SYSTEM_LOGS : acts_in
+    USER_PROFILES ||--o{ SIMULATION_BASELINES : configures_demand
+    USER_PROFILES o|--o| SIMULATION_SCENARIOS : updates_scenario
 
     BREAD_CATEGORIES ||--o{ RECIPES : defines
     INGREDIENTS ||--o{ RECIPES : required_by
@@ -1374,6 +1437,7 @@ erDiagram
     PRODUCTION_DECISIONS o|--o{ INVENTORY_LOG : causes
 
     BREAD_CATEGORIES ||--o{ DAILY_SALES_RECORDS : has_history
+    BREAD_CATEGORIES ||--o| SIMULATION_BASELINES : has_saved_demand
     BREAD_CATEGORIES ||--o{ ML_MODEL_VERSIONS : has_versions
     ML_MODEL_VERSIONS ||--o{ MODEL_EVALUATIONS : has_evaluations
     ML_MODEL_VERSIONS ||--o{ FEATURE_IMPORTANCE : has_features
@@ -1413,7 +1477,7 @@ erDiagram
 | 4. Notification targeting, preferences and delivery persistence | Added recipient to `notifications`, composite `notification_preferences`, per-user `fcm_tokens`, and normalized per-device `notification_deliveries` with the five required statuses and provider/timestamp/failure details. |
 | 5. Sales source-reference semantics | Replaced the overloaded UUID with `source_daily_result_id` and `external_source_reference`; added origin-specific CHECKs, partial uniqueness and matching date/category composite FK. |
 | 6. Prediction/calendar reproducibility | Added `prediction_calendar_events` as the exact many-to-many junction. |
-| 7. Node/Supabase transaction mechanism | One Node-owned PostgreSQL transaction/RPC commits FEFO, batch/snapshot/movement updates, production, sales, result and generated history together (§4.5.4); `SimulationCommitRepo` coordinates it. |
+| 7. Node/Supabase transaction mechanism | One Node-owned PostgreSQL transaction/RPC commits FEFO, batch/snapshot/movement updates, production, sales, result with method/current-weather snapshot and generated history together (§4.5.4); `PosSimulationRepo -> complete_pos_simulation_v3` coordinates it after one external lookup. |
 | 8. Inventory reversal traceability | `operation_id` groups movements; failed simulation rolls back. Re-simulation is future work pending an exact-batch/linked-history atomic policy; no `SimulationRun` table (§4.5.2). |
 | 9. Error and leftover-rate semantics | `sales_prediction_error = units_sold - predicted_units_sold`; signed values allowed. Leftover rate is not discarded-waste rate; zero denominator is Not Applicable (§§4.5.3–4.5.4, 4.7). |
 | 10. Allowed values and ranges | Defined the controlled values in Section 3, non-blank free text for disposal/location descriptions, and explicit quantity/date/confidence/evaluation checks. |

@@ -160,7 +160,7 @@ MODEL responses require a numerical confidence and applicable model version. COL
 
 ## 8. Shared report model and formulas
 
-`ReportService` produces one report model used by dashboard cards, detail tables and exports. For a single day/category the report uses validated stored operational results; comparable prediction-performance analysis matches selected validated `DailySalesRecord.unitsSold` to the stored prediction. Select actual, then imported, then simulation history for each category/day and keep its provenance. `estimatedDemand` remains analytical and cannot replace the model's units-sold target.
+`ReportService` produces one report model used by dashboard cards, detail tables and exports. For a single day/category the report uses validated stored operational results, clearly distinguishing predicted sales, generated simulation demand and fulfilled sales for V2, and identifying legacy V1 results. Comparable *primary* prediction-performance analysis matches selected validated non-simulated `DailySalesRecord.unitsSold` to the stored prediction: actual before imported. Simulation history remains reportable with its origin but is excluded from normal model training/evaluation and is never proof of real-world accuracy. `estimatedDemand` remains analytical and cannot replace the model's units-sold target.
 
 | Metric | Calculation |
 |---|---|

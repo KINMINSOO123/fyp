@@ -216,9 +216,11 @@ class _PredictionRulesFormState extends State<PredictionRulesForm> {
       enabled: !widget.busy,
       keyboardType: TextInputType.number,
       decoration: InputDecoration(
-        labelText: '$name base units',
+        labelText: '$name fallback units',
         helperText:
-            'Used only when this category has no valid sales observations.',
+            'Used only with no eligible validated daily sales. With fewer than '
+            '30 days or no active model, available sales are averaged instead.',
+        helperMaxLines: 3,
         border: const OutlineInputBorder(),
       ),
       autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -418,12 +420,14 @@ class _PredictionRulesFormState extends State<PredictionRulesForm> {
             const SizedBox(height: 12),
             ExpansionTile(
               maintainState: true,
-              title: const Text('Category cold-start bases'),
+              title: const Text('Cold-start fallback units'),
               subtitle: Text('${ids.length} stored or active categories'),
               children: [
                 const Text(
-                  'These whole-unit bases apply only with no valid sales '
-                  'observations. Existing category entries are preserved.',
+                  'Used only when a category has no eligible validated sales '
+                  'history. Otherwise cold start uses average units sold, '
+                  'including zero-sales days. These settings are separate '
+                  'from POS simulation base demand.',
                 ),
                 const SizedBox(height: 8),
                 for (final id in ids)

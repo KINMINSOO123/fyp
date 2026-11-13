@@ -91,3 +91,18 @@ test("T-DP-KL-04 [FR-DP-04]: incomplete cached year is not ordinary coverage", a
     (error: unknown) => error instanceof AppError &&
       error.code === "CALENDAR_CONTEXT_UNAVAILABLE");
 });
+
+test("T-DP-KL-05 [FR-DP-04]: administrator refresh verifies coverage for simulation", async () => {
+  const state = fixture();
+  const ready = await state.service.refresh("manager-1", year);
+  assert.equal(ready.status, "READY");
+  assert.equal(ready.coverage?.eventCount, ready.events.length);
+  assert.equal(ready.events.length, 2);
+  state.corruptCoverage();
+  const incomplete = await state.service.list(year);
+  assert.equal(incomplete.status, "INCOMPLETE");
+  state.failProvider();
+  await assert.rejects(state.service.refresh("manager-1", year),
+    (error: unknown) => error instanceof AppError &&
+      error.code === "HOLIDAY_PROVIDER_UNAVAILABLE");
+});

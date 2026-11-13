@@ -56,7 +56,7 @@ flowchart LR
   C --> T[Manager requests current or selected date simulation]
   T --> V[Lock; verify prediction and confirmed plan; revalidate ingredients]
   V --> F[Deduct expiry_date then received_date then id FEFO]
-  F --> D[Process simulated sales from stored prediction baseline]
+  F --> D[Generate independent baseline/scenario demand; limit fulfilled sales by production]
   D --> K[Commit production / transactions / results / origin-labelled history together]
   K --> L[Manager confirms donation or waste allocation]
   K --> R[On-demand dashboard / filtered reports / CSV / PDF]

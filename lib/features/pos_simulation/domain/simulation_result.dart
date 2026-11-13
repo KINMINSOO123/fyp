@@ -2,6 +2,9 @@ class SimulationItem {
   const SimulationItem({
     required this.breadCategoryName,
     required this.predictedUnitsSold,
+    required this.simulatedDemand,
+    required this.simulationMethod,
+    required this.simulationSnapshot,
     required this.predictionMode,
     required this.confidence,
     required this.produced,
@@ -17,6 +20,9 @@ class SimulationItem {
 
   final String breadCategoryName;
   final int predictedUnitsSold;
+  final int simulatedDemand;
+  final String simulationMethod;
+  final Map<String, dynamic>? simulationSnapshot;
   final String predictionMode;
   final double? confidence;
   final int produced;
@@ -32,6 +38,7 @@ class SimulationItem {
   factory SimulationItem.fromJson(Map<String, dynamic> json) {
     const integers = [
       'predictedUnitsSold',
+      'simulatedDemand',
       'produced',
       'unitsSold',
       'lostSales',
@@ -48,6 +55,17 @@ class SimulationItem {
       throw const FormatException('Invalid simulation result.');
     }
     final mode = json['predictionMode'];
+    final method = json['simulationMethod'];
+    final snapshot = json['simulationSnapshot'];
+    if ((method == 'PREDICTION_SCALED_V1' && snapshot != null) ||
+        ((method == 'INDEPENDENT_BASELINE_V2' ||
+                method == 'INDEPENDENT_CURRENT_WEATHER_V3') &&
+            snapshot is! Map<String, dynamic>) ||
+        (method != 'PREDICTION_SCALED_V1' &&
+            method != 'INDEPENDENT_BASELINE_V2' &&
+            method != 'INDEPENDENT_CURRENT_WEATHER_V3')) {
+      throw const FormatException('Invalid simulation method.');
+    }
     final confidence = json['confidence'];
     final modelVersionId = json['modelVersionId'];
     if ((mode == 'MODEL' &&
@@ -63,6 +81,9 @@ class SimulationItem {
     return SimulationItem(
       breadCategoryName: json['breadCategoryName'] as String,
       predictedUnitsSold: json['predictedUnitsSold'] as int,
+      simulatedDemand: json['simulatedDemand'] as int,
+      simulationMethod: method as String,
+      simulationSnapshot: snapshot as Map<String, dynamic>?,
       predictionMode: mode as String,
       confidence: (confidence as num?)?.toDouble(),
       produced: json['produced'] as int,

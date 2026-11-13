@@ -55,14 +55,27 @@ export class KlHolidayService {
   async list(year: number) {
     this.validYear(year);
     const repo = await this.repo();
-    return { year, stateCode: "KUL", coverage: await repo.coverage(year),
-      events: await repo.events(year) };
+    const [coverage, events] = await Promise.all([
+      repo.coverage(year), repo.events(year),
+    ]);
+    const status = !coverage ? "NOT_SYNCED" :
+      !Number.isFinite(Date.parse(coverage.refreshAfter)) ||
+      Date.parse(coverage.refreshAfter) <= this.now().getTime() ? "REFRESH_DUE" :
+      events.length !== coverage.eventCount ? "INCOMPLETE" : "READY";
+    return { year, stateCode: "KUL", status, coverage, events };
   }
   async refresh(actor: string, year: number) {
     this.validYear(year);
     const repo = await this.repo();
-    await repo.save(actor, await this.client.year(year));
-    return this.list(year);
+    const published = await this.client.year(year);
+    await repo.save(actor, published);
+    const result = await this.list(year);
+    if (result.status !== "READY" ||
+        result.events.length !== published.holidays.length) {
+      throw new AppError(503, "CALENDAR_CONTEXT_UNAVAILABLE",
+        "KL holiday sync could not verify complete year coverage. Retry refresh.");
+    }
+    return result;
   }
   private validYear(year: number) {
     if (!Number.isInteger(year) || year < 2000 || year > 2100) {

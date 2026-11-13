@@ -13,8 +13,10 @@ const predictionId = '00000000-0000-4000-8000-000000000001';
 Map<String, dynamic> planJson({
   bool confirmed = false,
   bool shortage = false,
+  bool processed = false,
+  String targetDate = date,
 }) => {
-  'targetDate': date,
+  'targetDate': targetDate,
   'status': shortage ? 'COMMITMENT_SHORTAGE' : 'READY',
   'entries': [
     {
@@ -24,7 +26,11 @@ Map<String, dynamic> planJson({
       'predictionMode': 'COLD_START',
       'confidence': null,
       'lowConfidence': true,
-      'state': confirmed ? 'CONFIRMED' : 'UNCONFIRMED',
+      'state': processed
+          ? 'PROCESSED'
+          : confirmed
+          ? 'CONFIRMED'
+          : 'UNCONFIRMED',
       'recommendedProduction': shortage ? null : 6,
       'maxProducible': shortage ? null : 10,
       'finalSelectedQty': confirmed ? 6 : null,
@@ -45,8 +51,27 @@ Map<String, dynamic> planJson({
 };
 
 class FakePredictionGateway implements PredictionGateway {
+  final requestedDates = <String>[];
+  final savedDates = <String>{};
+  int generations = 0;
   @override
-  Future<List<DailyPrediction>> getByDate(String date) async => [];
+  Future<List<DailyPrediction>> getByDate(String date) async {
+    requestedDates.add(date);
+    if (!savedDates.contains(date)) return [];
+    return [
+      DailyPrediction.fromJson({
+        'id': predictionId,
+        'targetDate': date,
+        'breadCategoryId': 'category-1',
+        'breadCategoryName': 'Wholemeal Bread',
+        'predictedUnitsSold': 6,
+        'predictionMode': 'COLD_START',
+        'confidence': null,
+        'modelVersionId': null,
+      }),
+    ];
+  }
+
   @override
   Future<NextPredictionState> getNextDayState() async => NextPredictionState(
     targetDate: date,
@@ -64,19 +89,27 @@ class FakePredictionGateway implements PredictionGateway {
     ],
   );
   @override
-  Future<void> generateNextDay() async {}
+  Future<void> generateNextDay() async {
+    generations++;
+  }
 }
 
 class FakeRecommendationGateway implements RecommendationGateway {
   FakeRecommendationGateway(this.plan);
   RecommendationPlan plan;
   int confirmations = 0;
+  final requestedDates = <String>[];
+  final plansByDate = <String, RecommendationPlan>{};
 
   @override
   Future<RecommendationPlan> getPlan(
     String targetDate, {
     String? revisingPredictionId,
-  }) async => plan;
+  }) async {
+    requestedDates.add(targetDate);
+    return plansByDate[targetDate] ?? plan;
+  }
+
   @override
   Future<RecommendationPlan> confirm({
     required String predictionId,
@@ -210,6 +243,57 @@ void main() {
       await tester.tap(find.text('Confirm Request'));
       await tester.pumpAndSettle();
       expect(restock.submissions, 1);
+    },
+  );
+
+  testWidgets(
+    'T-INV-UI-04 [FR-INV-07, FR-INV-09]: date switching shows empty and completed read-only plans',
+    (tester) async {
+      final predictions = FakePredictionGateway()..savedDates.add('2026-11-07');
+      final plans =
+          FakeRecommendationGateway(RecommendationPlan.fromJson(planJson()))
+            ..plansByDate['2026-11-07'] = RecommendationPlan.fromJson(
+              planJson(
+                processed: true,
+                confirmed: true,
+                targetDate: '2026-11-07',
+              ),
+            );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProductionPlanningScreen(
+            gateway: plans,
+            predictionGateway: predictions,
+            restockGateway: FakeRestockGateway(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Selected production date: $date'), findsOneWidget);
+      await tester.tap(find.text('Change'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('6').last);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(predictions.requestedDates, contains('2026-11-06'));
+      expect(
+        find.text('No predictions available for this date.'),
+        findsOneWidget,
+      );
+      expect(plans.requestedDates, isNot(contains('2026-11-06')));
+      expect(predictions.generations, 0);
+
+      await tester.tap(find.text('Change'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('7').last);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(plans.requestedDates, contains('2026-11-07'));
+      expect(find.text('Status: PROCESSED'), findsOneWidget);
+      expect(find.textContaining('read-only'), findsOneWidget);
+      expect(find.text('Revise Decision'), findsNothing);
+      expect(find.text('Confirm Production'), findsNothing);
+      expect(predictions.generations, 0);
     },
   );
 }

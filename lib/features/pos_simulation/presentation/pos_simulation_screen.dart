@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/bakery_theme.dart';
+import '../../../core/theme/bakery_widgets.dart';
 import '../../../core/network/api_exception.dart';
 import '../../inventory/data/recommendation_service.dart';
 import '../../inventory/domain/recommendation_plan.dart';
@@ -38,6 +40,7 @@ class _PosSimulationScreenState extends State<PosSimulationScreen> {
   bool get _manager => widget.role == UserRole.bakeryManager;
   bool get _ready =>
       _manager &&
+      _date == _today &&
       _result?.items.isEmpty == true &&
       _plan != null &&
       !_plan!.hasShortage &&
@@ -122,7 +125,10 @@ class _PosSimulationScreenState extends State<PosSimulationScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Run POS simulation?'),
         content: Text(
-          'Run the confirmed production plan for $date. This deducts ingredients and saves simulated sales and leftovers for every active category.',
+          'Run the confirmed production plan for $date using current '
+          'weather at simulation time. Independent customer demand '
+          'is generated before sales are limited by production. This '
+          'deducts ingredients and saves results for every active category.',
         ),
         actions: [
           TextButton(
@@ -172,71 +178,125 @@ class _PosSimulationScreenState extends State<PosSimulationScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Bakery date: ${_date ?? 'Loading...'}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Simulation date',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _date ?? 'Loading...',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: _loading || _running ? null : _chooseDate,
+                        icon: const Icon(Icons.calendar_month_outlined),
+                        label: const Text('Choose another date'),
+                      ),
+                    ],
                   ),
-                  TextButton(
-                    onPressed: _chooseDate,
-                    child: const Text('Change'),
-                  ),
-                ],
+                ),
               ),
-              const Text('Sales and financial figures are simulated.'),
-              if (_loading || _running) const LinearProgressIndicator(),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
+              const SizedBox(height: 8),
+              const BakeryNotice(
+                'Sales and financial figures are simulated, not real customer transactions.',
+              ),
+              if (_loading || _running) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(),
+                const SizedBox(height: 8),
                 Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  _running
+                      ? 'Checking current weather and saving simulation...'
+                      : 'Loading simulation and production plan...',
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                BakeryNotice(_error!, kind: BakeryNoticeKind.error),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _running
+                        ? null
+                        : _ready
+                        ? _run
+                        : () => _load(_date),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                  ),
                 ),
               ],
               if (result != null && result.items.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(
+                BakerySectionHeader(
                   'Completed · ${result.items.length} categories',
-                  style: Theme.of(context).textTheme.titleMedium,
                 ),
                 for (final item in result.items) _ResultCard(item: item),
               ] else if (!_loading && _manager) ...[
-                const SizedBox(height: 16),
-                Text(
-                  'Confirmed production',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                if (_planningIssue != null) Text(_planningIssue!),
+                const BakerySectionHeader('Production prerequisites'),
+                if (_planningIssue != null)
+                  BakeryNotice(_planningIssue!, kind: BakeryNoticeKind.warning),
                 if (plan != null) ...[
                   if (plan.hasShortage)
-                    const Text(
+                    const BakeryNotice(
                       'Confirmed quantities exceed valid ingredient stock.',
+                      kind: BakeryNoticeKind.warning,
                     ),
                   for (final entry in plan.entries)
-                    ListTile(
-                      title: Text(entry.breadCategoryName),
-                      subtitle: Text(
-                        entry.state == PlanningState.confirmed
-                            ? '${entry.finalSelectedQty} units confirmed'
-                            : entry.state == PlanningState.processed
-                            ? 'Already processed'
-                            : 'Manager confirmation required',
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              entry.breadCategoryName,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              entry.state == PlanningState.confirmed
+                                  ? '${entry.finalSelectedQty} units confirmed'
+                                  : entry.state == PlanningState.processed
+                                  ? 'Already processed'
+                                  : 'Manager confirmation required',
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                 ],
+                const SizedBox(height: 16),
+                if (_date != _today)
+                  const BakeryNotice(
+                    'Past dates are view-only. A labelled historical scenario '
+                    'is not available for a new simulation.',
+                    kind: BakeryNoticeKind.info,
+                  ),
                 const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: _ready && !_running ? _run : null,
-                  child: const Text('Run Simulation'),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _ready && !_running ? _run : null,
+                    icon: const Icon(Icons.play_circle_outline),
+                    label: const Text('Run Simulation'),
+                  ),
                 ),
+                const SizedBox(height: 8),
                 const Text(
-                  'Every active category needs a stored prediction and manager confirmation.',
+                  'Every active category needs a stored prediction and manager '
+                  'confirmation. Current weather describes the time of this '
+                  'run, not the whole day. Demand adjustments are demo assumptions.',
                 ),
               ] else if (!_loading) ...[
                 const SizedBox(height: 16),
-                const Text('No completed simulation for this date.'),
+                const BakeryNotice('No completed simulation for this date.'),
               ],
             ],
           ),
@@ -251,35 +311,167 @@ class _ResultCard extends StatelessWidget {
   final SimulationItem item;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            item.breadCategoryName,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          Text(
-            'Predicted ${item.predictedUnitsSold} · Produced ${item.produced}',
-          ),
-          Text(
-            item.predictionMode == 'MODEL'
-                ? 'Random Forest confidence ${item.confidence!.toStringAsFixed(1)}%'
-                : 'Cold-start heuristic · low confidence',
-          ),
-          Text(
-            'Sold ${item.unitsSold} · Lost sales ${item.lostSales} · Leftover ${item.leftover}',
-          ),
-          Text('Unallocated leftover: ${item.remainingUnallocatedLeftover}'),
-          Text('Prediction error: ${item.salesPredictionError} units'),
-          Text(
-            'Revenue RM ${item.revenue.toStringAsFixed(2)} · Ingredient cost RM ${item.ingredientCost.toStringAsFixed(2)}',
-          ),
-          Text('Gross profit RM ${item.grossProfit.toStringAsFixed(2)}'),
-        ],
+  Widget build(BuildContext context) {
+    final snapshot = item.simulationSnapshot;
+    final baseline = snapshot?['baseline'];
+    final weather = snapshot?['currentWeather'];
+    final textTheme = Theme.of(context).textTheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item.breadCategoryName, style: textTheme.titleLarge),
+            const SizedBox(height: 6),
+            Text(switch (item.simulationMethod) {
+              'INDEPENDENT_CURRENT_WEATHER_V3' =>
+                'Independent baseline with current weather v3',
+              'INDEPENDENT_BASELINE_V2' => 'Independent baseline scenario v2',
+              _ => 'Legacy prediction-scaled scenario v1',
+            }, style: textTheme.bodyMedium),
+            const Divider(height: 28),
+            Text('Demand and production', style: textTheme.titleMedium),
+            const SizedBox(height: 10),
+            _ResultValue('Predicted sales', '${item.predictedUnitsSold} units'),
+            _ResultValue(
+              'Simulated customer demand',
+              '${item.simulatedDemand} units',
+            ),
+            _ResultValue('Production quantity', '${item.produced} units'),
+            const Divider(height: 28),
+            Text('Sales outcome', style: textTheme.titleMedium),
+            const SizedBox(height: 10),
+            _ResultValue('Units sold', '${item.unitsSold} units'),
+            _ResultValue('Lost sales', '${item.lostSales} units'),
+            _ResultValue('Leftover', '${item.leftover} units'),
+            _ResultValue(
+              'Unallocated leftover',
+              '${item.remainingUnallocatedLeftover} units',
+            ),
+            const Divider(height: 28),
+            Text(
+              'Prediction and financial summary',
+              style: textTheme.titleMedium,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              item.predictionMode == 'MODEL'
+                  ? 'Random Forest confidence ${item.confidence!.toStringAsFixed(1)}%'
+                  : 'Cold-start heuristic · low confidence',
+            ),
+            const SizedBox(height: 10),
+            _ResultValue(
+              'Prediction error',
+              '${item.salesPredictionError} units',
+            ),
+            _ResultValue('Revenue', 'RM ${item.revenue.toStringAsFixed(2)}'),
+            _ResultValue(
+              'Ingredient cost',
+              'RM ${item.ingredientCost.toStringAsFixed(2)}',
+            ),
+            _ResultValue(
+              'Gross profit',
+              'RM ${item.grossProfit.toStringAsFixed(2)}',
+            ),
+            if (snapshot != null) ...[
+              const Divider(height: 28),
+              ExpansionTile(
+                key: ValueKey('scenario-${item.breadCategoryName}'),
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                title: const Text('Weather, holiday and scenario details'),
+                children: [
+                  _ResultValue(
+                    'Baseline',
+                    '${baseline is Map ? baseline['value'] : '—'} units',
+                  ),
+                  _ResultValue(
+                    'Baseline source',
+                    '${baseline is Map ? baseline['source'] : 'Unknown'}',
+                  ),
+                  _ResultValue(
+                    'Scenario version',
+                    '${snapshot['scenarioVersion']}',
+                  ),
+                  _ResultValue('Weather', '${snapshot['weatherCondition']}'),
+                  _ResultValue(
+                    'KL holiday',
+                    snapshot['holiday'] == true ? 'Yes' : 'No',
+                  ),
+                  _ResultValue(
+                    'Weekday factor',
+                    '${snapshot['weekdayFactor']}',
+                  ),
+                  _ResultValue(
+                    'Holiday factor',
+                    '${snapshot['holidayFactor']}',
+                  ),
+                  _ResultValue(
+                    'Weather factor',
+                    '${snapshot['weatherFactor']}',
+                  ),
+                  _ResultValue(
+                    'Random variation',
+                    '${snapshot['variationPct']}%',
+                  ),
+                  if (weather is Map) ...[
+                    _ResultValue(
+                      'Current weather at simulation time',
+                      '${weather['condition']}',
+                    ),
+                    _ResultValue(
+                      'Observed (bakery time)',
+                      _bakeryWeatherTime(weather['providerTimestamp']),
+                    ),
+                    const Text(
+                      'This is weather at the time of the run, not the whole day.',
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
+    );
+  }
+}
+
+class _ResultValue extends StatelessWidget {
+  const _ResultValue(this.label, this.value);
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(color: BakeryColors.secondary),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(color: BakeryColors.text),
+        ),
+      ],
     ),
   );
+}
+
+String _bakeryWeatherTime(Object? value) {
+  final instant = value is String ? DateTime.tryParse(value) : null;
+  if (instant == null) return 'Unavailable';
+  final local = instant.toUtc().add(const Duration(hours: 8));
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
 }
