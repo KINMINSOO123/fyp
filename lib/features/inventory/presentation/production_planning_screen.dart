@@ -4,6 +4,7 @@ import '../../../core/network/api_exception.dart';
 import '../../prediction/data/prediction_service.dart';
 import '../data/recommendation_service.dart';
 import '../data/restock_service.dart';
+import 'manager_restock_screen.dart';
 import '../domain/recommendation_plan.dart';
 
 class ProductionPlanningScreen extends StatefulWidget {
@@ -11,11 +12,14 @@ class ProductionPlanningScreen extends StatefulWidget {
     this.gateway,
     this.predictionGateway,
     this.restockGateway,
+    this.restockScreenBuilder,
     super.key,
   });
   final RecommendationGateway? gateway;
   final PredictionGateway? predictionGateway;
   final RestockGateway? restockGateway;
+  final Widget Function(String ingredientId, num suggestedGrams)?
+  restockScreenBuilder;
 
   @override
   State<ProductionPlanningScreen> createState() =>
@@ -28,7 +32,6 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
   late final RestockGateway _restockGateway;
   RecommendationPlan? _plan;
   RestockPreview? _restock;
-  bool _activeRestock = false;
   String? _date;
   String? _error;
   String? _restockError;
@@ -72,7 +75,6 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
       _restockError = null;
       _plan = null;
       _restock = null;
-      _activeRestock = false;
       _missingPrediction = false;
     });
     try {
@@ -83,12 +85,10 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
           : await _predictionGateway.getByDate(date);
       final plan = predictions.isEmpty ? null : await _gateway.getPlan(date);
       RestockPreview? restock;
-      var requests = <Map<String, dynamic>>[];
       String? restockError;
       if (plan != null) {
         try {
           restock = await _restockGateway.preview(date);
-          requests = await _restockGateway.list(administrator: false);
         } catch (error) {
           restockError = _message(error);
         }
@@ -100,12 +100,6 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
         _plan = plan;
         _restock = restock;
         _restockError = restockError;
-        _activeRestock = requests.any(
-          (request) =>
-              request['productionDate'] == date &&
-              (request['status'] == 'PENDING' ||
-                  request['status'] == 'PARTIALLY_RECEIVED'),
-        );
       });
     } catch (error) {
       if (mounted && version == _loadVersion) {
@@ -138,74 +132,32 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
     await _load();
   }
 
-  Future<void> _requestRestock() async {
-    final preview = _restock;
-    if (preview == null || !preview.needsRestock || _busy || _activeRestock) {
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Request Restock'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Production date: ${preview.targetDate}'),
-              const SizedBox(height: 8),
-              const Text('Desired production'),
-              for (final row in preview.desiredQuantities)
-                Text(
-                  '${row['breadCategoryName']}: ${row['desiredQty']} units '
-                  '(${row['basis']})',
-                ),
-              const SizedBox(height: 8),
-              const Text('Additional ingredients needed'),
-              for (final row in preview.shortages)
-                Text(
-                  '${row['ingredientName']}: '
-                  '${(row['additionalGrams'] as num).toStringAsFixed(3)} g',
-                ),
-              const SizedBox(height: 8),
-              const Text(
-                'Submitting does not add inventory or change '
-                'confirmed production. The server checks stock again.',
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Confirm Request'),
-          ),
-        ],
+  Future<void> _restockIngredient(Map<String, dynamic> shortage) async {
+    if (_busy) return;
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            widget.restockScreenBuilder?.call(
+              shortage['ingredientId'] as String,
+              shortage['additionalGrams'] as num,
+            ) ??
+            ManagerRestockScreen(
+              ingredientId: shortage['ingredientId'] as String,
+              suggestedGrams: shortage['additionalGrams'] as num,
+            ),
       ),
     );
-    if (confirmed != true || !mounted) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await _restockGateway.submit(preview);
-      if (!mounted) return;
+    if (saved == true && mounted) {
       await _load();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Restock request sent to bakery administrators.'),
-        ),
-      );
-    } catch (error) {
-      if (mounted) setState(() => _error = _message(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Batch recorded. Stock and production plan refreshed.',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -327,18 +279,22 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   for (final shortage in _restock!.shortages)
-                    Text(
-                      '${shortage['ingredientName']}: '
-                      '${(shortage['additionalGrams'] as num).toStringAsFixed(3)} g additional',
+                    Card(
+                      child: ListTile(
+                        title: Text(
+                          '${shortage['ingredientName']}: '
+                          '${(shortage['additionalGrams'] as num).toStringAsFixed(3)} g additional',
+                        ),
+                        trailing: completed
+                            ? null
+                            : TextButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _restockIngredient(shortage),
+                                child: const Text('Restock'),
+                              ),
+                      ),
                     ),
-                  if (_activeRestock)
-                    const Text('A restock request for this date is pending.'),
-                  FilledButton(
-                    onPressed: _busy || _activeRestock || completed
-                        ? null
-                        : _requestRestock,
-                    child: const Text('Request Restock'),
-                  ),
                 ],
                 if (plan.hasShortage) ...[
                   const SizedBox(height: 16),
@@ -367,7 +323,7 @@ class _ProductionPlanningScreenState extends State<ProductionPlanningScreen> {
                           ),
                           Text(
                             entry.predictionMode == 'COLD_START'
-                                ? 'Cold-start · Low-confidence heuristic estimate'
+                                ? 'Cold-start Â· Low-confidence heuristic estimate'
                                 : '${entry.lowConfidence ? 'Low Confidence' : 'Model agreement'}: ${entry.confidence!.toStringAsFixed(1)}%',
                           ),
                           Text(

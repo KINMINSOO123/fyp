@@ -41,32 +41,32 @@ class InventoryAdminService implements InventoryAdminGateway {
 
   @override
   Future<List<Map<String, dynamic>>> categories() async =>
-      _items(await _api.getJson('/api/admin/inventory/categories'));
+      _items(await _api.getJson('/api/inventory/categories'));
   @override
   Future<List<Map<String, dynamic>>> ingredients() async =>
-      _items(await _api.getJson('/api/admin/inventory/ingredients'));
+      _items(await _api.getJson('/api/inventory/ingredients'));
   @override
   Future<List<Map<String, dynamic>>> recipe(String categoryId) async => _items(
-    await _api.getJson('/api/admin/inventory/categories/$categoryId/recipe'),
+    await _api.getJson('/api/inventory/categories/$categoryId/recipe'),
   );
   @override
   Future<List<Map<String, dynamic>>> batches(int page) async =>
-      _items(await _api.getJson('/api/admin/inventory/batches?page=$page'));
+      _items(await _api.getJson('/api/inventory/batches?page=$page'));
   @override
   Future<void> saveCategory(Map<String, dynamic> data, {String? id}) async {
     if (id == null) {
-      await _api.postJson('/api/admin/inventory/categories', data);
+      await _api.postJson('/api/inventory/categories', data);
     } else {
-      await _api.patchJson('/api/admin/inventory/categories/$id', data);
+      await _api.patchJson('/api/inventory/categories/$id', data);
     }
   }
 
   @override
   Future<void> saveIngredient(Map<String, dynamic> data, {String? id}) async {
     if (id == null) {
-      await _api.postJson('/api/admin/inventory/ingredients', data);
+      await _api.postJson('/api/inventory/ingredients', data);
     } else {
-      await _api.patchJson('/api/admin/inventory/ingredients/$id', data);
+      await _api.patchJson('/api/inventory/ingredients/$id', data);
     }
   }
 
@@ -75,14 +75,14 @@ class InventoryAdminService implements InventoryAdminGateway {
     String categoryId,
     List<Map<String, dynamic>> items,
   ) async {
-    await _api.putJson('/api/admin/inventory/categories/$categoryId/recipe', {
+    await _api.putJson('/api/inventory/categories/$categoryId/recipe', {
       'items': items,
     });
   }
 
   @override
   Future<void> receiveBatch(Map<String, dynamic> data) async {
-    await _api.postJson('/api/admin/inventory/batches', data);
+    await _api.postJson('/api/inventory/batches', data);
   }
 
   @override
@@ -90,7 +90,7 @@ class InventoryAdminService implements InventoryAdminGateway {
     String batchId,
     Map<String, dynamic> data,
   ) async {
-    await _api.patchJson('/api/admin/inventory/batches/$batchId/stock', data);
+    await _api.patchJson('/api/inventory/batches/$batchId/stock', data);
   }
 
   @override

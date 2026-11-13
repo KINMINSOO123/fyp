@@ -2,18 +2,25 @@ import 'package:flutter/material.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/inventory_admin_service.dart';
-import 'dialog_controller_scope.dart';
+import '../../profile/domain/user_profile.dart';
 import 'restock_admin_screen.dart';
+import 'manager_restock_screen.dart';
 
 class InventoryAdminScreen extends StatefulWidget {
-  const InventoryAdminScreen({this.gateway, super.key});
+  const InventoryAdminScreen({
+    this.gateway,
+    this.role = UserRole.systemAdministrator,
+    super.key,
+  });
   final InventoryAdminGateway? gateway;
+  final UserRole role;
 
   @override
   State<InventoryAdminScreen> createState() => _InventoryAdminScreenState();
 }
 
 class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
+  bool get _manager => widget.role == UserRole.bakeryManager;
   late final InventoryAdminGateway _gateway;
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _ingredients = [];
@@ -341,122 +348,6 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
     }
   }
 
-  Future<void> _receiptDialog() async {
-    if (_ingredients.where((item) => item['isActive'] == true).isEmpty) return;
-    String? ingredientId =
-        _ingredients.firstWhere((item) => item['isActive'] == true)['id']
-            as String;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final received = TextEditingController(text: today);
-    final expiry = TextEditingController();
-    final quantity = TextEditingController();
-    final unitCost = TextEditingController();
-    final source = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => DialogControllerScope(
-        controllers: [received, expiry, quantity, unitCost, source],
-        child: StatefulBuilder(
-          builder: (context, refresh) => AlertDialog(
-            title: const Text('Receive ingredient batch'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: ingredientId,
-                    items: _ingredients
-                        .where((item) => item['isActive'] == true)
-                        .map(
-                          (item) => DropdownMenuItem(
-                            value: item['id'] as String,
-                            child: Text(item['name'] as String),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) => refresh(() => ingredientId = value),
-                    decoration: const InputDecoration(labelText: 'Ingredient'),
-                  ),
-                  TextField(
-                    controller: received,
-                    decoration: const InputDecoration(
-                      labelText: 'Received date (YYYY-MM-DD)',
-                    ),
-                  ),
-                  TextField(
-                    controller: expiry,
-                    decoration: const InputDecoration(
-                      labelText: 'Expiry date (YYYY-MM-DD)',
-                    ),
-                  ),
-                  TextField(
-                    controller: quantity,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Quantity (g)',
-                    ),
-                  ),
-                  TextField(
-                    controller: unitCost,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Batch cost (MYR/kg)',
-                    ),
-                  ),
-                  TextField(
-                    controller: source,
-                    decoration: const InputDecoration(
-                      labelText: 'Supplier/source (optional)',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final grams = double.tryParse(quantity.text);
-                  final cost = double.tryParse(unitCost.text);
-                  if (grams == null ||
-                      cost == null ||
-                      expiry.text.trim().isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Enter valid receipt fields.'),
-                      ),
-                    );
-                    return;
-                  }
-                  _save(
-                    () => _gateway.receiveBatch({
-                      'ingredientId': ingredientId,
-                      'receivedDate': received.text.trim(),
-                      'expiryDate': expiry.text.trim(),
-                      'quantityGrams': grams,
-                      'unitCostSnapshot': cost,
-                      'source': source.text.trim().isEmpty
-                          ? null
-                          : source.text.trim(),
-                    }),
-                  );
-                },
-                child: const Text('Receive'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> _removeDialog(Map<String, dynamic> batch) async {
     final grams = TextEditingController();
     final note = TextEditingController();
@@ -535,7 +426,9 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
     length: 3,
     child: Scaffold(
       appBar: AppBar(
-        title: const Text('Inventory Administration'),
+        title: Text(
+          _manager ? 'Inventory & Batches' : 'Inventory Administration',
+        ),
         bottom: const TabBar(
           tabs: [
             Tab(text: 'Categories'),
@@ -544,20 +437,23 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => const RestockAdminScreen(),
+          if (_manager)
+            IconButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      const RestockAdminScreen(role: UserRole.bakeryManager),
+                ),
               ),
+              icon: const Icon(Icons.local_shipping_outlined),
+              tooltip: 'Restock requests',
             ),
-            icon: const Icon(Icons.local_shipping_outlined),
-            tooltip: 'Restock requests',
-          ),
-          IconButton(
-            onPressed: _scanAlerts,
-            icon: const Icon(Icons.notification_add_outlined),
-            tooltip: 'Check stock and expiry alerts',
-          ),
+          if (!_manager)
+            IconButton(
+              onPressed: _scanAlerts,
+              icon: const Icon(Icons.notification_add_outlined),
+              tooltip: 'Check stock and expiry alerts',
+            ),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh),
@@ -578,33 +474,38 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
                       subtitle: const Text(
                         'Create inactive, add a recipe, then activate.',
                       ),
-                      trailing: IconButton(
-                        onPressed: () => _categoryDialog(),
-                        icon: const Icon(Icons.add),
-                        tooltip: 'Add category',
-                      ),
+                      trailing: _manager
+                          ? null
+                          : IconButton(
+                              onPressed: () => _categoryDialog(),
+                              icon: const Icon(Icons.add),
+                              tooltip: 'Add category',
+                            ),
                     ),
                     for (final category in _categories)
                       Card(
                         child: ListTile(
                           title: Text(category['name'] as String),
                           subtitle: Text(
-                            'Order ${category['displayOrder']} · ${category['isActive'] == true ? 'Active' : 'Inactive'} · MYR ${category['sellingPrice']}',
+                            'Order ${category['displayOrder']} Â· ${category['isActive'] == true ? 'Active' : 'Inactive'} Â· MYR ${category['sellingPrice']}',
                           ),
-                          trailing: Wrap(
-                            children: [
-                              IconButton(
-                                onPressed: () => _recipeDialog(category),
-                                icon: const Icon(Icons.receipt_long),
-                                tooltip: 'Edit recipe',
-                              ),
-                              IconButton(
-                                onPressed: () => _categoryDialog(category),
-                                icon: const Icon(Icons.edit),
-                                tooltip: 'Edit category',
-                              ),
-                            ],
-                          ),
+                          trailing: _manager
+                              ? null
+                              : Wrap(
+                                  children: [
+                                    IconButton(
+                                      onPressed: () => _recipeDialog(category),
+                                      icon: const Icon(Icons.receipt_long),
+                                      tooltip: 'Edit recipe',
+                                    ),
+                                    IconButton(
+                                      onPressed: () =>
+                                          _categoryDialog(category),
+                                      icon: const Icon(Icons.edit),
+                                      tooltip: 'Edit category',
+                                    ),
+                                  ],
+                                ),
                         ),
                       ),
                   ],
@@ -613,24 +514,29 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
                   children: [
                     ListTile(
                       title: const Text('Ingredients and stock'),
-                      trailing: IconButton(
-                        onPressed: () => _ingredientDialog(),
-                        icon: const Icon(Icons.add),
-                        tooltip: 'Add ingredient',
-                      ),
+                      trailing: _manager
+                          ? null
+                          : IconButton(
+                              onPressed: () => _ingredientDialog(),
+                              icon: const Icon(Icons.add),
+                              tooltip: 'Add ingredient',
+                            ),
                     ),
                     for (final ingredient in _ingredients)
                       Card(
                         child: ListTile(
                           title: Text(ingredient['name'] as String),
                           subtitle: Text(
-                            '${ingredient['snapshotQuantityGrams']} g · ${ingredient['isActive'] == true ? 'Active' : 'Inactive'}',
+                            '${ingredient['snapshotQuantityGrams']} g Â· ${ingredient['isActive'] == true ? 'Active' : 'Inactive'}',
                           ),
-                          trailing: IconButton(
-                            onPressed: () => _ingredientDialog(ingredient),
-                            icon: const Icon(Icons.edit),
-                            tooltip: 'Edit ingredient',
-                          ),
+                          trailing: _manager
+                              ? null
+                              : IconButton(
+                                  onPressed: () =>
+                                      _ingredientDialog(ingredient),
+                                  icon: const Icon(Icons.edit),
+                                  tooltip: 'Edit ingredient',
+                                ),
                         ),
                       ),
                   ],
@@ -638,15 +544,27 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
                 ListView(
                   children: [
                     ListTile(
-                      title: const Text('Batch receipts and adjustments'),
+                      title: const Text('Ingredient batches'),
                       subtitle: const Text(
                         'Production later consumes valid batches by FEFO.',
                       ),
-                      trailing: IconButton(
-                        onPressed: _receiptDialog,
-                        icon: const Icon(Icons.add),
-                        tooltip: 'Receive batch',
-                      ),
+                      trailing: _manager
+                          ? IconButton(
+                              onPressed: () async {
+                                final saved = await Navigator.of(context)
+                                    .push<bool>(
+                                      MaterialPageRoute(
+                                        builder: (_) => ManagerRestockScreen(
+                                          gateway: _gateway,
+                                        ),
+                                      ),
+                                    );
+                                if (saved == true && mounted) await _load();
+                              },
+                              icon: const Icon(Icons.add),
+                              tooltip: 'Receive batch',
+                            )
+                          : null,
                     ),
                     for (final batch in _batches)
                       Card(
@@ -662,10 +580,10 @@ class _InventoryAdminScreenState extends State<InventoryAdminScreen> {
                                 'Ingredient',
                           ),
                           subtitle: Text(
-                            'Received ${batch['receivedDate']} · expires ${batch['expiryDate']}\n${batch['remainingQuantityGrams']} g · ${batch['status']} · MYR ${batch['unitCostSnapshot']}/kg',
+                            'Received ${batch['receivedDate']} Â· expires ${batch['expiryDate']}\n${batch['remainingQuantityGrams']} g Â· ${batch['status']} Â· MYR ${batch['unitCostSnapshot']}/kg',
                           ),
                           isThreeLine: true,
-                          trailing: batch['status'] == 'ACTIVE'
+                          trailing: _manager && batch['status'] == 'ACTIVE'
                               ? IconButton(
                                   onPressed: () => _removeDialog(batch),
                                   icon: const Icon(Icons.remove_circle_outline),

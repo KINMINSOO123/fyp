@@ -125,7 +125,8 @@ export class InventoryAdminService {
       "expiryDate", "quantityGrams", "unitCostSnapshot", "source",
       "restockRequestItemId", "receiptKey"] : ["ingredientId",
       "receivedDate", "expiryDate", "quantityGrams", "unitCostSnapshot",
-      "source"]);
+      "source", "receiptKey"]);
+    const receiptKey = id(raw.receiptKey);
     const receivedDate = string(raw.receivedDate, "Receipt date", 10);
     const expiryDate = string(raw.expiryDate, "Expiry date", 10);
     if (!isCalendarDate(receivedDate) || !isCalendarDate(expiryDate) || expiryDate <= receivedDate ||
@@ -137,12 +138,14 @@ export class InventoryAdminService {
       quantityGrams: quantity(raw.quantityGrams, "Receipt quantity", false),
       unitCostSnapshot: money(raw.unitCostSnapshot, "Batch unit cost"),
       source: raw.source === null ? null : (raw.source as string).trim(),
+      receiptKey,
     };
     if (linked) {
       const repo = this.providedRestockRepo ?? new (await import(
         "./restock.repo.js")).RestockRepo();
+      const { receiptKey: _, ...linkedPayload } = payload;
       return repo.receiveLinked(actor, id(raw.restockRequestItemId),
-        id(raw.receiptKey), payload);
+        receiptKey, linkedPayload);
     }
     return (await this.repo()).mutate(actor, "RECEIVE_BATCH", payload);
   }

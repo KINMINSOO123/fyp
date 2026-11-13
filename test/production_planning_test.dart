@@ -230,19 +230,36 @@ void main() {
             gateway: fake,
             predictionGateway: FakePredictionGateway(),
             restockGateway: restock,
+            restockScreenBuilder: (ingredientId, grams) {
+              expect(ingredientId, 'flour');
+              expect(grams, 200);
+              return Scaffold(
+                body: TextButton(
+                  onPressed: () {
+                    fake.plan = RecommendationPlan.fromJson(planJson());
+                    Navigator.of(
+                      tester.element(find.text('Record mock batch')),
+                    ).pop(true);
+                  },
+                  child: const Text('Record mock batch'),
+                ),
+              );
+            },
           ),
         ),
       );
       await tester.pumpAndSettle();
       expect(find.textContaining('200.000 g short'), findsOneWidget);
       expect(find.text('Confirm Production'), findsNothing);
-      expect(find.text('Request Restock'), findsOneWidget);
-      await tester.tap(find.text('Request Restock'));
+      expect(find.text('Restock'), findsOneWidget);
+      await tester.tap(find.text('Restock'));
       await tester.pumpAndSettle();
-      expect(find.text('Production date: $date'), findsOneWidget);
-      await tester.tap(find.text('Confirm Request'));
+      await tester.tap(find.text('Record mock batch'));
       await tester.pumpAndSettle();
-      expect(restock.submissions, 1);
+      expect(fake.requestedDates.length, greaterThan(1));
+      expect(find.text('Recommended: 6 units'), findsOneWidget);
+      expect(fake.confirmations, 0);
+      expect(restock.submissions, 0);
     },
   );
 

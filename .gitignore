@@ -60,3 +60,4 @@ ml_service/artifacts/*
 
 # Local Flutter development configuration (passed with --dart-define-from-file)
 /flutter.dev.json
+/backups/

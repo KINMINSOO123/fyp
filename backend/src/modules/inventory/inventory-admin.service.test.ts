@@ -65,9 +65,13 @@ test("T-INV-AUTO-11 [FR-INV-02, FR-INV-03]: batch receipt and removal validate d
   const { instance, calls } = service();
   const receipt = { ingredientId: ingredient, receivedDate: "2026-11-04",
     expiryDate: "2026-11-07", quantityGrams: 500.5,
-    unitCostSnapshot: 8.25, source: "Supplier" };
+    unitCostSnapshot: 8.25, source: "Supplier", receiptKey: actor };
   await instance.receiveBatch(actor, receipt);
   assert.equal(calls[0]?.action, "RECEIVE_BATCH");
+  assert.equal(calls[0]?.payload.receiptKey, actor);
+  await assert.rejects(instance.receiveBatch(actor, {
+    ...receipt, receiptKey: undefined,
+  }), (error) => error instanceof AppError && error.code === "VALIDATION_ERROR");
   await assert.rejects(instance.receiveBatch(actor, { ...receipt, expiryDate: "2026-11-03" }),
     (error) => error instanceof AppError && error.code === "VALIDATION_ERROR");
   await assert.rejects(instance.receiveBatch(actor, { ...receipt, quantityGrams: -1 }),

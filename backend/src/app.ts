@@ -46,7 +46,8 @@ app.use("/api/admin/users", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), u
 app.use("/api/admin/models", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), modelManagementRouter);
 app.use("/api/admin/calendar-events", authenticate,
   requireRole("SYSTEM_ADMINISTRATOR"), calendarRouter);
-app.use("/api/admin/inventory", authenticate, requireRole("SYSTEM_ADMINISTRATOR"), inventoryAdminRouter);
+app.use("/api/inventory", authenticate, inventoryAdminRouter);
+app.use("/api/admin/inventory", authenticate, inventoryAdminRouter);
 app.use("/api/admin/ai-suggestions", authenticate,
   requireRole("SYSTEM_ADMINISTRATOR"), aiSuggestionsRouter);
 app.use("/api/admin/restock-requests", authenticate,

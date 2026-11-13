@@ -11,4 +11,4 @@ managerRestockRouter.get("/", controller.list);
 managerRestockRouter.post("/", requireRole("BAKERY_MANAGER"),
   controller.submit);
 adminRestockRouter.get("/", controller.list);
-adminRestockRouter.post("/:requestId/cancel", controller.cancel);
+managerRestockRouter.post("/:requestId/cancel", requireRole("BAKERY_MANAGER"), controller.cancel);

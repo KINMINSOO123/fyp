@@ -7,7 +7,7 @@ import { errorHandler } from "../../middleware/errorHandler.js";
 import { requireRole } from "../../middleware/requireRole.js";
 import { RestockController } from "./restock.controller.js";
 
-test("T-RST-05 [BR-UAM-02, EXT-RST-06]: manager requests, administrator receives/cancels", async () => {
+test("T-RST-05 [BR-UAM-02, EXT-RST-06]: manager requests and cancels; administrator reads only", async () => {
   const calls: string[] = [];
   const controller = new RestockController({
     async preview() { calls.push("preview"); return { targetDate: "2026-11-12",
@@ -30,8 +30,8 @@ test("T-RST-05 [BR-UAM-02, EXT-RST-06]: manager requests, administrator receives
   app.post("/restock", requireRole("BAKERY_MANAGER"), controller.submit);
   app.get("/admin/restock", requireRole("SYSTEM_ADMINISTRATOR"),
     controller.list);
-  app.post("/admin/restock/:requestId/cancel",
-    requireRole("SYSTEM_ADMINISTRATOR"), controller.cancel);
+  app.post("/restock/:requestId/cancel",
+    requireRole("BAKERY_MANAGER"), controller.cancel);
   app.use(errorHandler);
   const server = await new Promise<Server>((resolve) => {
     const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -49,12 +49,13 @@ test("T-RST-05 [BR-UAM-02, EXT-RST-06]: manager requests, administrator receives
       "manager")).status, 200);
     assert.equal((await request("/restock", "manager", "POST")).status, 201);
     assert.equal((await request("/admin/restock", "admin")).status, 200);
-    assert.equal((await request("/admin/restock/id/cancel",
-      "admin", "POST")).status, 200);
+    assert.equal((await request("/restock/id/cancel",
+      "manager", "POST")).status, 200);
     assert.equal((await request("/restock", "admin", "POST")).status, 403);
+    assert.equal((await request("/restock/id/cancel", "admin", "POST")).status, 403);
     assert.equal((await request("/admin/restock", "manager")).status, 403);
     assert.deepEqual(calls, ["preview", "submit:manager",
-      "list:admin:SYSTEM_ADMINISTRATOR", "cancel:admin"]);
+      "list:admin:SYSTEM_ADMINISTRATOR", "cancel:manager"]);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) =>
       error ? reject(error) : resolve()));

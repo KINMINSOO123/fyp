@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../core/network/api_exception.dart';
 import '../data/inventory_admin_service.dart';
 import '../data/restock_service.dart';
+import '../../profile/domain/user_profile.dart';
 import 'dialog_controller_scope.dart';
 
 String _receiptKey() {
@@ -24,15 +25,18 @@ class RestockAdminScreen extends StatefulWidget {
   const RestockAdminScreen({
     this.restockGateway,
     this.inventoryGateway,
+    this.role = UserRole.systemAdministrator,
     super.key,
   });
   final RestockGateway? restockGateway;
   final InventoryAdminGateway? inventoryGateway;
+  final UserRole role;
   @override
   State<RestockAdminScreen> createState() => _RestockAdminScreenState();
 }
 
 class _RestockAdminScreenState extends State<RestockAdminScreen> {
+  bool get _manager => widget.role == UserRole.bakeryManager;
   late final RestockGateway _restock;
   late final InventoryAdminGateway _inventory;
   List<Map<String, dynamic>> _requests = const [];
@@ -65,7 +69,7 @@ class _RestockAdminScreenState extends State<RestockAdminScreen> {
       _error = null;
     });
     try {
-      final requests = await _restock.list(administrator: true);
+      final requests = await _restock.list(administrator: !_manager);
       requests.sort((a, b) {
         bool active(Map<String, dynamic> row) =>
             row['status'] == 'PENDING' || row['status'] == 'PARTIALLY_RECEIVED';
@@ -258,9 +262,10 @@ class _RestockAdminScreenState extends State<RestockAdminScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text(
-            'Receive physical stock as an inventory batch. '
-            'A request alone never adds stock.',
+          Text(
+            _manager
+                ? 'Record physical stock as an inventory batch. A request alone never adds stock.'
+                : 'View manager restock requests and receipts. Batch changes are manager-only.',
           ),
           if (_loading) const LinearProgressIndicator(),
           if (_error != null)
@@ -298,7 +303,7 @@ class _RestockAdminScreenState extends State<RestockAdminScreen> {
                                 '${item['cancelledGrams']} g, outstanding '
                                 '${item['outstandingGrams']} g',
                               ),
-                              if (open)
+                              if (open && _manager)
                                 TextButton(
                                   onPressed: () => _receive(item),
                                   child: const Text('Receive Batch'),
@@ -307,8 +312,9 @@ class _RestockAdminScreenState extends State<RestockAdminScreen> {
                           );
                         },
                       ),
-                    if (request['status'] == 'PENDING' ||
-                        request['status'] == 'PARTIALLY_RECEIVED')
+                    if (_manager &&
+                        (request['status'] == 'PENDING' ||
+                            request['status'] == 'PARTIALLY_RECEIVED'))
                       OutlinedButton(
                         onPressed: () => _cancel(request),
                         child: const Text('Cancel Outstanding'),

@@ -4,6 +4,7 @@ import 'package:fyp/features/inventory/data/inventory_admin_service.dart';
 import 'package:fyp/features/inventory/data/restock_service.dart';
 import 'package:fyp/features/inventory/presentation/inventory_admin_screen.dart';
 import 'package:fyp/features/inventory/presentation/restock_admin_screen.dart';
+import 'package:fyp/features/profile/domain/user_profile.dart';
 
 class FakeInventoryAdminGateway implements InventoryAdminGateway {
   @override
@@ -116,9 +117,12 @@ void main() {
       await tester.tap(find.text('Ingredients'));
       await tester.pumpAndSettle();
       expect(find.text('Flour'), findsOneWidget);
+      expect(find.byTooltip('Add ingredient'), findsOneWidget);
       await tester.tap(find.text('Batches'));
       await tester.pumpAndSettle();
       expect(find.textContaining('2026-11-10'), findsOneWidget);
+      expect(find.byTooltip('Receive batch'), findsNothing);
+      expect(find.byTooltip('Remove batch stock'), findsNothing);
     },
   );
 
@@ -127,12 +131,16 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: InventoryAdminScreen(gateway: FakeInventoryAdminGateway()),
+        home: InventoryAdminScreen(
+          gateway: FakeInventoryAdminGateway(),
+          role: UserRole.bakeryManager,
+        ),
       ),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Batches'));
     await tester.pumpAndSettle();
+    expect(find.byTooltip('Remove batch stock'), findsOneWidget);
     await tester.tap(find.byTooltip('Receive batch'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -141,8 +149,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('4.50'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -157,6 +165,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: RestockAdminScreen(
+          role: UserRole.bakeryManager,
           restockGateway: FakeRestockGateway(),
           inventoryGateway: FakeInventoryAdminGateway(),
         ),

@@ -4,22 +4,23 @@ import { test } from "node:test";
 import express from "express";
 import { createAuthenticate } from "../../middleware/authenticate.js";
 import { errorHandler } from "../../middleware/errorHandler.js";
-import { requireRole } from "../../middleware/requireRole.js";
 import { AppError } from "../../shared/AppError.js";
 import { InventoryAdminController } from "./inventory-admin.controller.js";
+import { createInventoryRouter } from "./inventory-admin.routes.js";
 
-test("T-INV-AUTO-12 [FR-INV-01, BR-UAM-02]: only active administrators can read and change inventory", async () => {
+test("inventory reads allow both roles; definitions are admin-only and batches manager-only", async () => {
   let reads = 0;
-  let actor = "";
+  let definitionActor = "";
+  let batchActor = "";
   const controller = new InventoryAdminController({
     async listCategories() { reads++; return []; },
     async listIngredients() { return []; },
     async listRecipes() { return []; },
     async listBatches() { return { items: [], page: 1, pageSize: 50, total: 0 }; },
-    async saveCategory(actorId) { actor = actorId; return { id: "category" }; },
+    async saveCategory(actorId) { definitionActor = actorId; return { id: "category" }; },
     async saveIngredient() { return {}; },
     async replaceRecipe() { return {}; },
-    async receiveBatch() { return {}; },
+    async receiveBatch(actorId) { batchActor = actorId; return {}; },
     async adjustBatch() { return {}; },
   });
   const app = express();
@@ -34,9 +35,8 @@ test("T-INV-AUTO-12 [FR-INV-01, BR-UAM-02]: only active administrators can read 
     return { userId: token, fullName: "Test",
       role: token === "manager" ? "BAKERY_MANAGER" as const : "SYSTEM_ADMINISTRATOR" as const,
       accountStatus: "ACTIVE" as const };
-  } }), requireRole("SYSTEM_ADMINISTRATOR"));
-  app.get("/categories", controller.listCategories);
-  app.post("/categories", controller.createCategory);
+  } }));
+  app.use(createInventoryRouter(controller));
   app.use(errorHandler);
   const server = await new Promise<Server>((resolve) => {
     const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -45,26 +45,48 @@ test("T-INV-AUTO-12 [FR-INV-01, BR-UAM-02]: only active administrators can read 
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("No test port.");
     const base = `http://127.0.0.1:${address.port}`;
-    for (const token of [null, "manager", "inactive"] as const) {
+    for (const token of [null, "inactive"] as const) {
       const headers: Record<string, string> = token ?
         { Authorization: `Bearer ${token}` } : {};
       const read = await fetch(`${base}/categories`, { headers });
-      assert.equal(read.status, token === "manager" ? 403 : 401);
+      assert.equal(read.status, 401);
       const write = await fetch(`${base}/categories`, { method: "POST", headers });
-      assert.equal(write.status, token === "manager" ? 403 : 401);
+      assert.equal(write.status, 401);
     }
     assert.equal(reads, 0);
-    const success = await fetch(`${base}/categories`, {
-      headers: { Authorization: "Bearer admin" },
+    for (const token of ["admin", "manager"]) {
+      const read = await fetch(`${base}/categories`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(read.status, 200);
+      const stock = await fetch(`${base}/batches`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(stock.status, 200);
+    }
+    assert.equal(reads, 2);
+    const deniedDefinition = await fetch(`${base}/ingredients`, {
+      method: "POST", headers: { Authorization: "Bearer manager" },
     });
-    assert.equal(success.status, 200);
-    assert.equal(reads, 1);
+    assert.equal(deniedDefinition.status, 403);
+    const deniedBatch = await fetch(`${base}/batches`, {
+      method: "POST", headers: { Authorization: "Bearer admin" },
+    });
+    assert.equal(deniedBatch.status, 403);
+    const deniedAdjustment = await fetch(`${base}/batches/id/stock`, {
+      method: "PATCH", headers: { Authorization: "Bearer admin" },
+    });
+    assert.equal(deniedAdjustment.status, 403);
     const write = await fetch(`${base}/categories`, {
       method: "POST", headers: { Authorization: "Bearer admin",
         "Content-Type": "application/json" }, body: "{}",
     });
     assert.equal(write.status, 201);
-    assert.equal(actor, "admin");
+    assert.equal(definitionActor, "admin");
+    const receipt = await fetch(`${base}/batches`, { method: "POST",
+      headers: { Authorization: "Bearer manager" } });
+    assert.equal(receipt.status, 201);
+    assert.equal(batchActor, "manager");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) =>
       error ? reject(error) : resolve()));

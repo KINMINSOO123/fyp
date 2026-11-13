@@ -11,6 +11,7 @@ import '../../model_management/presentation/model_list_screen.dart';
 import '../../inventory/presentation/production_planning_screen.dart';
 import '../../inventory/presentation/inventory_admin_screen.dart';
 import '../../inventory/presentation/restock_admin_screen.dart';
+import '../../inventory/presentation/manager_restock_screen.dart';
 import '../../user_administration/presentation/user_list_screen.dart';
 import '../../pos_simulation/presentation/pos_simulation_screen.dart';
 import '../../pos_simulation/data/pos_simulation_service.dart';
@@ -47,7 +48,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _dateError = false;
 
   Future<void> _loadBakeryDate() async {
-    if (mounted) setState(() { _dateLoading = true; _dateError = false; });
+    if (mounted) {
+      setState(() {
+        _dateLoading = true;
+        _dateError = false;
+      });
+    }
     try {
       final date = await _dateService.getBakeryToday();
       formatBakeryDate(date);
@@ -94,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _ => const ReportsScreen(),
           }
         : switch (index) {
-            1 => const InventoryAdminScreen(),
+            1 => const InventoryAdminScreen(role: UserRole.systemAdministrator),
             2 => const ModelListScreen(),
             3 => const ReportsScreen(),
             _ => const SettingsScreen(),
@@ -208,218 +214,326 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: RefreshIndicator(
           onRefresh: _loadBakeryDate,
           child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: [
-            if (_bakeryToday != null)
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            children: [
+              if (_bakeryToday != null)
+                Text(
+                  formatBakeryDate(_bakeryToday!),
+                  style: Theme.of(context).textTheme.titleMedium,
+                )
+              else if (_dateLoading)
+                const Text('Loading bakery date...')
+              else
+                TextButton.icon(
+                  onPressed: _loadBakeryDate,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Bakery date unavailable · Retry'),
+                ),
+              if (_dateError && _bakeryToday != null)
+                TextButton(
+                  onPressed: _loadBakeryDate,
+                  child: const Text('Could not refresh bakery date · Retry'),
+                ),
+              const SizedBox(height: 8),
               Text(
-                formatBakeryDate(_bakeryToday!),
-                style: Theme.of(context).textTheme.titleMedium,
-              )
-            else if (_dateLoading)
-              const Text('Loading bakery date...')
-            else
-              TextButton.icon(
-                onPressed: _loadBakeryDate,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Bakery date unavailable · Retry'),
+                'Welcome, ${profile.fullName}',
+                style: Theme.of(context).textTheme.headlineSmall,
               ),
-            if (_dateError && _bakeryToday != null)
-              TextButton(
-                onPressed: _loadBakeryDate,
-                child: const Text('Could not refresh bakery date · Retry'),
+              const SizedBox(height: 4),
+              Text(roleLabel, style: Theme.of(context).textTheme.bodyMedium),
+              const BakerySectionHeader('Pending actions'),
+              const PendingActionsPanel(),
+              const BakerySectionHeader('Quick actions'),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final manager = profile.role == UserRole.bakeryManager;
+                  final actions = manager
+                      ? <(IconData, String, Widget)>[
+                          (
+                            Icons.auto_graph,
+                            'Predictions',
+                            PredictionScreen(role: profile.role),
+                          ),
+                          (
+                            Icons.event_note,
+                            'Production plan',
+                            const ProductionPlanningScreen(),
+                          ),
+                          (
+                            Icons.play_circle_outline,
+                            'POS simulation',
+                            PosSimulationScreen(role: profile.role),
+                          ),
+                          (
+                            Icons.recycling,
+                            'Leftovers',
+                            LeftoverManagementScreen(role: profile.role),
+                          ),
+                          (
+                            Icons.inventory_2_outlined,
+                            'Inventory',
+                            const InventoryAdminScreen(
+                              role: UserRole.bakeryManager,
+                            ),
+                          ),
+                          (
+                            Icons.local_shipping_outlined,
+                            'Restock',
+                            const ManagerRestockScreen(),
+                          ),
+                        ]
+                      : <(IconData, String, Widget)>[
+                          (
+                            Icons.inventory_2_outlined,
+                            'Inventory',
+                            const InventoryAdminScreen(),
+                          ),
+                          (
+                            Icons.local_shipping_outlined,
+                            'Requests',
+                            const RestockAdminScreen(),
+                          ),
+                          (
+                            Icons.model_training,
+                            'Models',
+                            const ModelListScreen(),
+                          ),
+                          (
+                            Icons.manage_accounts,
+                            'Users',
+                            const UserListScreen(),
+                          ),
+                          (
+                            Icons.settings_outlined,
+                            'Settings',
+                            const SettingsScreen(),
+                          ),
+                          (
+                            Icons.auto_awesome_outlined,
+                            'AI bread ideas',
+                            const AiSuggestionsScreen(),
+                          ),
+                        ];
+                  final width = (constraints.maxWidth - 8) / 2;
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final action in actions)
+                        SizedBox(
+                          width: width,
+                          child: BakeryQuickAction(
+                            icon: action.$1,
+                            label: action.$2,
+                            onTap: () => _openPage(action.$3),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
-            const SizedBox(height: 8),
-            Text(
-              'Welcome, ${profile.fullName}',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(roleLabel, style: Theme.of(context).textTheme.bodyMedium),
-            const BakerySectionHeader('Pending actions'),
-            const PendingActionsPanel(),
-            const BakerySectionHeader('Quick actions'),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final manager = profile.role == UserRole.bakeryManager;
-                final actions = manager
-                    ? <(IconData, String, Widget)>[
-                        (
-                          Icons.auto_graph,
-                          'Predictions',
-                          PredictionScreen(role: profile.role),
-                        ),
-                        (
-                          Icons.event_note,
-                          'Production plan',
-                          const ProductionPlanningScreen(),
-                        ),
-                        (
-                          Icons.play_circle_outline,
-                          'POS simulation',
-                          PosSimulationScreen(role: profile.role),
-                        ),
-                        (
-                          Icons.recycling,
-                          'Leftovers',
-                          LeftoverManagementScreen(role: profile.role),
-                        ),
-                      ]
-                    : <(IconData, String, Widget)>[
-                        (
-                          Icons.inventory_2_outlined,
-                          'Inventory',
-                          const InventoryAdminScreen(),
-                        ),
-                        (
-                          Icons.local_shipping_outlined,
-                          'Restock',
-                          const RestockAdminScreen(),
-                        ),
-                        (
-                          Icons.model_training,
-                          'Models',
-                          const ModelListScreen(),
-                        ),
-                        (
-                          Icons.manage_accounts,
-                          'Users',
-                          const UserListScreen(),
-                        ),
-                        (
-                          Icons.settings_outlined,
-                          'Settings',
-                          const SettingsScreen(),
-                        ),
-                        (
-                          Icons.auto_awesome_outlined,
-                          'AI bread ideas',
-                          const AiSuggestionsScreen(),
-                        ),
-                      ];
-                final width = (constraints.maxWidth - 8) / 2;
-                return Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    for (final action in actions)
-                      SizedBox(
-                        width: width,
-                        child: BakeryQuickAction(
-                          icon: action.$1,
-                          label: action.$2,
-                          onTap: () => _openPage(action.$3),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-            const BakerySectionHeader('Your account'),
-            BakeryActionCard(
-              icon: Icons.notifications_outlined,
-              title: 'Notifications',
-              subtitle: 'Review your alerts and delivery preferences.',
-              onTap: _openNotifications,
-            ),
-            const SizedBox(height: 16),
-            BakeryActionCard(
-              icon: Icons.person_outline,
-              title: 'Profile',
-              subtitle: '${profile.fullName} · $roleLabel',
-              onTap: () => _openPage(
-                ProfileScreen(sessionController: sessionController),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (profile.role == UserRole.systemAdministrator)
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.manage_accounts_outlined),
-                  title: const Text('Users and Roles'),
-                  subtitle: const Text(
-                    'Manage user accounts, assigned roles and account status.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const UserListScreen(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            const SizedBox(height: 16),
-            if (profile.role == UserRole.systemAdministrator) ...[
-              const BakerySectionHeader('Administration'),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.settings_outlined),
-                  title: const Text('Bakery and Prediction Settings'),
-                  subtitle: const Text(
-                    'Edit validated bakery details and prediction factors.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const SettingsScreen(),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.event_outlined),
-                  title: const Text('KL Public Holidays'),
-                  subtitle: const Text(
-                    'View KL holidays and refresh published calendar data.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const CalendarScreen(),
-                    ),
-                  ),
-                ),
+              const BakerySectionHeader('Your account'),
+              BakeryActionCard(
+                icon: Icons.notifications_outlined,
+                title: 'Notifications',
+                subtitle: 'Review your alerts and delivery preferences.',
+                onTap: _openNotifications,
               ),
               const SizedBox(height: 16),
               BakeryActionCard(
-                icon: Icons.auto_awesome_outlined,
-                title: 'AI Bread Suggestions',
-                subtitle: 'Review draft bread categories and recipes.',
-                onTap: () => _openPage(const AiSuggestionsScreen()),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.history_outlined),
-                  title: const Text('Audit History'),
-                  subtitle: const Text(
-                    'Review recorded user and system actions.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const AuditScreen(),
-                    ),
-                  ),
+                icon: Icons.person_outline,
+                title: 'Profile',
+                subtitle: '${profile.fullName} · $roleLabel',
+                onTap: () => _openPage(
+                  ProfileScreen(sessionController: sessionController),
                 ),
               ),
               const SizedBox(height: 16),
+              if (profile.role == UserRole.systemAdministrator)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.manage_accounts_outlined),
+                    title: const Text('Users and Roles'),
+                    subtitle: const Text(
+                      'Manage user accounts, assigned roles and account status.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const UserListScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 16),
+              if (profile.role == UserRole.systemAdministrator) ...[
+                const BakerySectionHeader('Administration'),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Bakery and Prediction Settings'),
+                    subtitle: const Text(
+                      'Edit validated bakery details and prediction factors.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SettingsScreen(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.event_outlined),
+                    title: const Text('KL Public Holidays'),
+                    subtitle: const Text(
+                      'View KL holidays and refresh published calendar data.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const CalendarScreen(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                BakeryActionCard(
+                  icon: Icons.auto_awesome_outlined,
+                  title: 'AI Bread Suggestions',
+                  subtitle: 'Review draft bread categories and recipes.',
+                  onTap: () => _openPage(const AiSuggestionsScreen()),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.history_outlined),
+                    title: const Text('Audit History'),
+                    subtitle: const Text(
+                      'Review recorded user and system actions.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AuditScreen(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.inventory_outlined),
+                    title: const Text('Inventory Administration'),
+                    subtitle: const Text(
+                      'Manage bread categories, recipes, ingredients and batches.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const InventoryAdminScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.local_shipping_outlined),
+                    title: const Text('Restock Requests'),
+                    subtitle: const Text(
+                      'View manager restock requests and receipts.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const RestockAdminScreen(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.model_training),
+                    title: const Text('Model Management'),
+                    subtitle: const Text(
+                      'Train, evaluate and manage model versions.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ModelListScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              const BakerySectionHeader('Bakery operations'),
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.inventory_outlined),
-                  title: const Text('Inventory Administration'),
-                  subtitle: const Text(
-                    'Manage bread categories, recipes, ingredients and batches.',
+                  leading: const Icon(Icons.auto_graph),
+                  title: const Text('Demand Prediction'),
+                  subtitle: Text(
+                    profile.role == UserRole.bakeryManager
+                        ? 'Generate and review next-day predictions.'
+                        : 'Review saved next-day predictions.',
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
                     await Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => const InventoryAdminScreen(),
+                        builder: (_) => PredictionScreen(role: profile.role),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              if (profile.role == UserRole.bakeryManager) ...[
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.inventory_2_outlined),
+                    title: const Text('Production Planning'),
+                    subtitle: const Text(
+                      'Review shared stock and confirm next-day production.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ProductionPlanningScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.point_of_sale_outlined),
+                  title: const Text('POS Simulation'),
+                  subtitle: Text(
+                    profile.role == UserRole.bakeryManager
+                        ? 'Run confirmed production and review simulated sales.'
+                        : 'Review completed simulated sales.',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => PosSimulationScreen(role: profile.role),
                       ),
                     );
                   },
@@ -428,161 +542,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(height: 16),
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.local_shipping_outlined),
-                  title: const Text('Restock Requests'),
-                  subtitle: const Text('Review shortages and receive batches.'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const RestockAdminScreen(),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.model_training),
-                  title: const Text('Model Management'),
-                  subtitle: const Text(
-                    'Train, evaluate and manage model versions.',
+                  leading: const Icon(Icons.volunteer_activism_outlined),
+                  title: const Text('Leftovers and Donations'),
+                  subtitle: Text(
+                    profile.role == UserRole.bakeryManager
+                        ? 'Allocate simulated leftovers and update donation progress.'
+                        : 'Review completed leftover allocations.',
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
                     await Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => const ModelListScreen(),
+                        builder: (_) =>
+                            LeftoverManagementScreen(role: profile.role),
                       ),
                     );
                   },
                 ),
               ),
-              const SizedBox(height: 16),
-            ],
-            const BakerySectionHeader('Bakery operations'),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.auto_graph),
-                title: const Text('Demand Prediction'),
-                subtitle: Text(
-                  profile.role == UserRole.bakeryManager
-                      ? 'Generate and review next-day predictions.'
-                      : 'Review saved next-day predictions.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => PredictionScreen(role: profile.role),
+              if (profile.role == UserRole.systemAdministrator) ...[
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.handshake_outlined),
+                    title: const Text('Charity Partners'),
+                    subtitle: const Text(
+                      'Add, update and deactivate donation partners.',
                     ),
-                  );
-                },
-              ),
-            ),
-            if (profile.role == UserRole.bakeryManager) ...[
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CharityPartnersScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('Production Planning'),
+                  leading: const Icon(Icons.assessment_outlined),
+                  title: const Text('Dashboard and Reports'),
                   subtitle: const Text(
-                    'Review shared stock and confirm next-day production.',
+                    'Review simulated results and save filtered CSV or PDF reports.',
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
                     await Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => const ProductionPlanningScreen(),
+                        builder: (_) => const ReportsScreen(),
                       ),
                     );
                   },
                 ),
               ),
+              if (isSigningOut) ...[
+                const SizedBox(height: 24),
+                const Center(child: CircularProgressIndicator()),
+              ],
             ],
-            const SizedBox(height: 16),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.point_of_sale_outlined),
-                title: const Text('POS Simulation'),
-                subtitle: Text(
-                  profile.role == UserRole.bakeryManager
-                      ? 'Run confirmed production and review simulated sales.'
-                      : 'Review completed simulated sales.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => PosSimulationScreen(role: profile.role),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.volunteer_activism_outlined),
-                title: const Text('Leftovers and Donations'),
-                subtitle: Text(
-                  profile.role == UserRole.bakeryManager
-                      ? 'Allocate simulated leftovers and update donation progress.'
-                      : 'Review completed leftover allocations.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          LeftoverManagementScreen(role: profile.role),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (profile.role == UserRole.systemAdministrator) ...[
-              const SizedBox(height: 16),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.handshake_outlined),
-                  title: const Text('Charity Partners'),
-                  subtitle: const Text(
-                    'Add, update and deactivate donation partners.',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const CharityPartnersScreen(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.assessment_outlined),
-                title: const Text('Dashboard and Reports'),
-                subtitle: const Text(
-                  'Review simulated results and save filtered CSV or PDF reports.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const ReportsScreen(),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (isSigningOut) ...[
-              const SizedBox(height: 24),
-              const Center(child: CircularProgressIndicator()),
-            ],
-          ],
           ),
         ),
       ),
@@ -650,11 +670,27 @@ String formatBakeryDate(String isoDate) {
     throw const FormatException('Invalid bakery date.');
   }
   const weekdays = [
-    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
   ];
   const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
   return '${weekdays[date.weekday - 1]}, ${date.day} '
       '${months[date.month - 1]} ${date.year}';
